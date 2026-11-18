@@ -22,3 +22,5 @@ analysis/llm_judge_texts.json
 
 .env
 .claude/settings.local.json
+
+models/_archive/
