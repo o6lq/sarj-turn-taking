@@ -41,7 +41,7 @@ def wav_bytes(x: np.ndarray) -> bytes:
 def dev_calls():
     out = []
     for f in sorted((KIT / "data" / "dev" / "labels").glob("*.json")):
-        lab = json.loads(f.read_text())
+        lab = json.loads(f.read_text(encoding="utf-8"))
         u = max(lab["agent_utterances"], key=lambda u: u["end_ms"] - u["start_ms"])
         out.append({"sid": lab["scenario_id"], "text": u["text"], "start": u["start_ms"], "end": u["end_ms"]})
     return out
@@ -49,26 +49,27 @@ def dev_calls():
 
 def replay(sid: str) -> dict:
     run = KIT / "runs" / "sim-dev-latest"
-    lab = json.loads((KIT / "data" / "dev" / "labels" / f"{sid}.json").read_text())
+    lab = json.loads((KIT / "data" / "dev" / "labels" / f"{sid}.json").read_text(encoding="utf-8"))
     out = {"label": lab, "decisions": [], "trace": [], "events": []}
     if not (run / "score.json").exists():
         return out
-    meta = json.loads((run / "run.json").read_text())
+    meta = json.loads((run / "run.json").read_text(encoding="utf-8"))
     s0 = next(s for s in meta["scenarios"] if s["scenario_id"] == sid)
-    for line in (run / "log.jsonl").read_text().splitlines():
+    for line in (run / "log.jsonl").read_text(encoding="utf-8").splitlines():
         l = json.loads(line)
         if s0["start_ms"] <= l["stream_ms"] < s0["start_ms"] + s0["duration_ms"] + 1500:
             out["decisions"].append({"t": l["stream_ms"] - s0["start_ms"], "d": l["msg"]["decision"]})
-    tr = json.loads((run / "trace.json").read_text()).get(sid, [])
+    tr = json.loads((run / "trace.json").read_text(encoding="utf-8")).get(sid, [])
     out["trace"] = [{k: v for k, v in r.items() if k != "f"} for r in tr if r["kind"] in ("asr", "STOP", "candidate", "TAKE_TURN")]
-    out["events"] = [e for e in json.loads((run / "score.json").read_text())["events"] if e["scenario_id"] == sid]
+    out["events"] = [e for e in json.loads((run / "score.json").read_text(encoding="utf-8"))["events"] if e["scenario_id"] == sid]
     return out
 
 
 def results() -> dict:
     """Everything the demo shows as numbers, read from the real run files (nothing typed by hand)."""
     import csv
-    rows = list(csv.DictReader((KIT / "runs" / "sim-history.csv").open(encoding="utf-8")))
+    hist = KIT / "runs" / "sim-history.csv"          # runs/ is git-ignored: a fresh clone has none, show dashes instead of crashing
+    rows = list(csv.DictReader(hist.open(encoding="utf-8"))) if hist.exists() else []
     def pick(prefix, data):
         r = [x for x in rows if x["name"].startswith(prefix) and x["data"] == data]
         return {k: r[-1][k] for k in ("core", "R", "S", "false_stops", "misses")} if r else None
@@ -80,12 +81,12 @@ def results() -> dict:
     for name in ("llm_judge", "brain_eval"):
         f = KIT / "analysis" / f"{name}.json"
         if f.exists():
-            d = json.loads(f.read_text())
+            d = json.loads(f.read_text(encoding="utf-8"))
             out[name] = {k: {kk: vv for kk, vv in v.items() if kk not in ("pred", "rows", "batch_s")} | (
                 {"median_first_s": v.get("median_first_s"), "facts_ok": v.get("facts_ok")} if name == "brain_eval" else {})
                 for k, v in d.items() if not k.startswith("_")}
     m = KIT / "models" / "student" / "meta.json"
-    out["student"] = json.loads(m.read_text()) if m.exists() else None
+    out["student"] = json.loads(m.read_text(encoding="utf-8")) if m.exists() else None
     return out
 
 
