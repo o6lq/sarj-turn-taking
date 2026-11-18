@@ -202,17 +202,31 @@ def _cohere(audio_i16: np.ndarray) -> dict:
 _fw = None
 
 
+def _load_fw():
+    """GPU only if it really runs: an NVIDIA card without the CUDA 12 libraries (cublas64_12.dll) loads the model
+    fine and then fails on the first transcribe, so we run one tiny transcribe before trusting it.
+    TT_FW_DEVICE=cpu|cuda forces a device (default auto)."""
+    from faster_whisper import WhisperModel
+    dev = os.environ.get("TT_FW_DEVICE", "auto")
+    if dev in ("auto", "cuda"):
+        try:
+            m = WhisperModel(FW_MODEL, device="cuda", compute_type="float16")
+            list(m.transcribe(np.zeros(16000, np.float32), language="ar", beam_size=1, without_timestamps=True)[0])
+            return m
+        except Exception as e:
+            if dev == "cuda":
+                raise
+            print(f"faster-whisper: GPU not usable ({e}); using CPU", flush=True)
+    return WhisperModel(FW_MODEL, device="cpu", compute_type="int8")
+
+
 def _faster(audio_i16: np.ndarray) -> dict:
     """Windows / Linux: Whisper through CTranslate2 (faster-whisper). NVIDIA GPU if present, else CPU int8."""
     global _fw
     t0 = time.perf_counter()
     try:
         if _fw is None:
-            from faster_whisper import WhisperModel
-            try:
-                _fw = WhisperModel(FW_MODEL, device="cuda", compute_type="float16")
-            except Exception:
-                _fw = WhisperModel(FW_MODEL, device="cpu", compute_type="int8")
+            _fw = _load_fw()
         x = audio_i16.astype(np.float32) / 32768.0
         segs, _ = _fw.transcribe(x, language="ar", beam_size=1, initial_prompt=PROMPT or None,
                                  condition_on_previous_text=False, without_timestamps=True, vad_filter=False)
