@@ -23,7 +23,7 @@ class MySystem(System):
         return self.tt.trace
 
     def on_scenario_start(self, context):
-        self.tt.on_scenario_start()
+        self.tt.on_scenario_start(context)
 
     def on_agent_start(self, text, duration_ms):
         self.tt.on_agent_start(text)
