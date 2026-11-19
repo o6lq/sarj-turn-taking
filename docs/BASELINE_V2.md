@@ -32,9 +32,29 @@ Notes:
 By category: overlapping starts (OV) 1 of 2 stopped (one missed interruption); background (BG) 2 of 3 kept (one
 false stop); every other category perfect.
 
-## 3. Checkpoint mirror and stress sets (Phase 1)
+## 3. Checkpoint mirror and stress sets (Phase 1, v2.0 + decision log; decisions identical to v2.0)
 
-Filled in by Phase 1: see §5 below and `runs/v2.0-cp-*`.
+Data: `data/cp-mirror` (48 calls, 6 per category), `data/cp-stress-dev` and `data/cp-stress-test` (70 each, probes
+S1–S7 × 10), `data/cp-mirror-s32/-s33` (the same 48 sentences, other voices/levels/noise). Built with
+`tools/cp_bank.py` + `tools/cp_gen.py`; measurement only, never in git or training.
+
+| Set | How | Run | Core [95 % CI] | R | S | False stops | Misses | Stop latency median / p90 |
+|---|---|---|---|---|---|---|---|---|
+| cp-mirror (seed 31) | real time | `runs/v2.0-cp-mirror-rt` | **92.0** [82.9–98.1] | 0.92 | 0.95 | 2 | 1 | 0 / 0 |
+| cp-mirror (seed 31) | sim | `runs/sim-v2.0-cp-mirror` | **93.0** [84.0–99.0] | 0.92 | 0.95 | 2 | 1 | 0 / 0 |
+| cp-mirror-s32 | sim | `runs/sim-v2.0-cp-mirror-s32` | **91.6** [86.4–96.1] | 0.98 | 0.86 | 6 | 0 | 0 / 0 |
+| cp-mirror-s33 | sim | `runs/sim-v2.0-cp-mirror-s33` | **93.4** [88.6–98.1] | 0.92 | 0.95 | 2 | 0 | 0 / 862 |
+| cp-stress-dev | sim | `runs/sim-v2.0-cp-stress-dev` | **81.7** [73.3–87.6] | 1.00 | 0.66 | 17 | 0 | 0 / 0 |
+| cp-stress-test | sim | `runs/sim-v2.0-cp-stress-test` | **76.4** [65.3–84.2] | 0.79 | 0.69 | 14 | 5 | 0 / 0 |
+| cp-mirror, 3 renders combined (144) | sim | `runs/v2.0-cp-mirror-combined.json` | **92.8** [89.1–96.0] | 0.94 | 0.92 | | | |
+
+Combined by category: AM R 0.94 S 1.00 · BC S 0.89 · BG S 0.94 · DV R 0.97 S 1.00 · GI R 0.96 S 1.00 · HT S 0.60 · NV S 0.94 · OV R 0.89 S 1.00.
+16-call draw from the combined mirror: median 93.8 [81.0–100.0], P(< 92) = 37%.
+64-call projection: 93.0 [86.6–97.4], P(≥ 95) = 21%.
+Gate baselines added by PLAN_V3: **G8** cp-mirror real time 92.0 (and per category as above) · **G9** per-probe pass
+rates in `runs/sim-v2.0-cp-stress-test/cp_report.md` · **G10** novel-test-2 85.3 (≥ 85.0) · **G11** sim vs real
+time on cp-mirror: 47 of 48 events identical.
+Real-time stress runs and the tunnel run: `runs/v2.0-cp-stress-*-rt`, `runs/v2.0-cp-mirror-tunnel`.
 
 ## 4. Rollback procedure
 
