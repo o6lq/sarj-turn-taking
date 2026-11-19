@@ -65,7 +65,7 @@ RESUME_GAP_MS = 120      # ...once the sound has ended for this long...
 RESUME_MAX_VOICED_MS = 1200  # ...it was short...
 RESUME_P = 0.3           # ...and the full reading says it was not a floor bid
 RESUME_GAP_BC_MS = 280   # F1: after a backchannel opener («إيه، …») wait longer: an answer often follows a pause
-RESUME_SAFE = 1          # F1: no RESUME after an agent question/offer, and only after 80 ms with no voice at all
+RESUME_SAFE = 2          # F1: 2 = only after 80 ms with no voice at all; 1 = also never after an agent question/offer
 
 _MODELS = Path(__file__).resolve().parents[1] / "models"
 # the learned layer is trained on the words of ONE ASR engine, so each engine has its own weights
@@ -411,7 +411,8 @@ class TurnTaker:
         if s is None or not self.stopped or not speaking or self.ms - s["t"] > RESUME_MS + 30:
             return None
         sem = f.get("sem_p", -1.0)
-        unsafe = RESUME_SAFE and (lexicon.asks_or_offers(self.heard_context()) or max(self.vad_recent, default=0) >= 0.3)
+        asked = RESUME_SAFE == 1 and lexicon.asks_or_offers(self.heard_context())
+        unsafe = RESUME_SAFE and (asked or max(self.vad_recent, default=0) >= 0.3)
         if unsafe:
             self._log("resume_blocked", why="agent asked/offered, or the caller's voice is still there")
         if not unsafe and p < RESUME_P and f["bid"] == 0 and (sem < 0 or sem < SEM_LO) and self.ms - (self.cand or {}).get("last", 0) >= 60:
