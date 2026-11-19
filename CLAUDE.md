@@ -8,6 +8,7 @@ Claude Code reads this file automatically whenever the project opens. It says **
 3. `INTERFACE.md`, `SCORING.md`, `DATA.md`, `SCRIPTS.md`: the official kit contract. These override everything.
 4. `docs/EXPERIMENTS.md`: what has been tried, and what it scored.
 5. **`docs/PLAN_V2.md`: the current plan (freeze, live-demo consistency and speed, persona "Tayf", the «طيب» work). Tasks T12–T24 below come from it. Start here.**
+6. **`docs/PLAN_V3_SPEED.md`: reply speed without lower quality (demo only, branch `demo/day6`). S1–S5 are built; measure them, then S6–S12.**
 
 ## 1. Context in one paragraph
 We are a student team in the Sarj AI hackathon. The harness streams a 2-channel call (agent + caller, 16 kHz, 20 ms frames) to `my_system.py` over WebSocket :8765. We decide only **STOP / RESUME / TAKE_TURN**. Full credit needs a STOP within 300 ms of the caller's intent becoming evident. Final rank = 80 % hidden human Arabic benchmark + 20 % judges.
