@@ -56,14 +56,17 @@ def probes(run: Path, data: Path) -> dict:
     return {k: [sum(v) / len(v), len(v)] for k, v in out.items()}
 
 
-def run_all(name: str, overrides: dict, sets: list[str]) -> dict:
+def run_all(name: str, overrides: dict, sets: list[str], reuse: set[str] | None = None) -> dict:
     out = {"name": name, "overrides": overrides, "sets": {}, "probes": {}}
     runs = {}
     for s in sets:
         t0 = time.time()
         d = KIT / "data" / s
         rd = KIT / "runs" / f"sim-{name}-{s}"
-        sc = simulate(str(KIT / "my_system.py"), d, overrides=overrides, out_dir=rd)
+        if reuse is not None and s in reuse and (rd / "score.json").exists():
+            sc = json.loads((rd / "score.json").read_text(encoding="utf-8"))      # kept from the last run of this name
+        else:
+            sc = simulate(str(KIT / "my_system.py"), d, overrides=overrides, out_dir=rd)
         runs[s] = rd
         out["sets"][s] = summarize(s, sc)
         x = out["sets"][s]
@@ -128,12 +131,15 @@ def main(argv=None) -> int:
     ap.add_argument("--set", action="append", default=[], help="NAME=VALUE override (module.NAME for turn modules)")
     ap.add_argument("--baseline", default=str(KIT / "runs" / "gates-v2.0.json"))
     ap.add_argument("--baseline-from-runs", action="store_true")
+    ap.add_argument("--rerun", default=None, help="comma list: re-run only these sets, reuse the others from runs/sim-<name>-*")
     a = ap.parse_args(argv)
     if a.baseline_from_runs:
         baseline_from_runs()
         return 0
     base = json.loads(Path(a.baseline).read_text())
-    new = run_all(a.name, dict(s.split("=", 1) for s in a.set), a.sets.split(","))
+    sets = a.sets.split(",")
+    reuse = None if not a.rerun else set(sets) - set(a.rerun.split(","))
+    new = run_all(a.name, dict(s.split("=", 1) for s in a.set), sets, reuse)
     (KIT / "runs" / f"gates-{a.name}.json").write_text(json.dumps(new, indent=1, ensure_ascii=False))
     if "mirror3" in new:
         print(f"  cp-mirror ×3 combined: {base['mirror3']['core']:.2f} → {new['mirror3']['core']:.2f}   " +
