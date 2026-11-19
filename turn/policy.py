@@ -66,6 +66,9 @@ RESUME_MAX_VOICED_MS = 1200  # ...it was short...
 RESUME_P = 0.3           # ...and the full reading says it was not a floor bid
 OPTION_ANSWER = 1        # F2: picking an option the agent offered is a floor bid, not an echo
 OPTION_EARLY_MS = 400    # ...a candidate that opened this soon after the agent started counts as an answer
+PRE_ONSET_MS = 300       # F3: caller sound this recent when the agent starts = they were already talking
+PRE_ONSET_RELAX_DB = 4.0 # ...and for the first 300 ms of agent speech the level gate is this much easier
+PRE_ONSET_RULE = 0       # 1: already talking + one content word = stop (rejected: +3 false stops)
 
 _MODELS = Path(__file__).resolve().parents[1] / "models"
 # the learned layer is trained on the words of ONE ASR engine, so each engine has its own weights
@@ -154,11 +157,31 @@ class TurnTaker:
         self.prev_agent_text = self.agent_text
         self.agent_active, self.agent_text, self.stopped = True, text, False
         self.agent_start_ms = self.ms
+        self._carry_turn_into_candidate()
         self.turn = None
         self.agent_utt += 1
         if self.dlog:
             self.dlog.event({"call": self.call_no, "t": self.ms, "kind": "agent_start", "agent_utt": self.agent_utt,
                              "is_question": text.strip().endswith(("؟", "?")), "n_words": len(text.split()), "agent_text": text})
+
+    def _carry_turn_into_candidate(self):
+        """F3: the caller was already speaking when the agent started. Keep their turn (its start and audio) as the
+        first candidate instead of throwing it away, so the recogniser hears the first words and decides at once."""
+        t = self.turn
+        if not PRE_ONSET_MS or t is None or self.ms - t["last"] > PRE_ONSET_MS or t.get("burst_voiced", 0) < 60:
+            return
+        start = max(t.get("burst_start", t["start"]), self.ms - 3000)       # only the latest burst, not their earlier answer
+        n = int((self.ms - start) // FRAME_MS)
+        floor = self._floor_db()
+        levels = []
+        for fr in list(self.ring)[-n:] if n else []:
+            db = 20 * np.log10(np.sqrt(np.mean(fr.astype(np.float64) ** 2)) / 32768 + 1e-9)
+            if db > floor + SNR_DB:
+                levels.append(db)
+        self.cand_id += 1
+        self.cand = {"id": self.cand_id, "start": start, "voiced": t.get("burst_voiced", 0), "last": t["last"], "levels": levels,
+                     "sub": -1e9, "text": "", "feats": None, "agent_slope": 0.0, "pre_onset": True}
+        self._log("candidate", level_rel=round(self._cand_rel(self.cand), 1), pre_onset=True)
 
     def on_agent_end(self):
         self.agent_active = False
@@ -197,6 +220,8 @@ class TurnTaker:
         level_ok = resid_db > self.ref_db - REL_DB and resid_db > floor + SNR_DB
         # opening a candidate needs the caller's level; once open, quieter syllables of the same word still count
         is_speech = p > VAD_TH and (level_ok or (self.cand is not None and resid_db > floor + SNR_DB - 3))
+        if not is_speech and self.cand is not None and self.cand.get("pre_onset") and self.ms - self.agent_start_ms <= 300:
+            is_speech = p > VAD_TH and resid_db > self.ref_db - REL_DB - PRE_ONSET_RELAX_DB   # echo canceller not settled yet
 
         # learn the caller's own voice level from what they say while the agent is silent (U0 first)
         # (only after the agent has spoken once: before that, a TV or a room could be mistaken for the caller)
@@ -314,7 +339,8 @@ class TurnTaker:
                 "logprob": c.get("logprob", -1.0), "echo_ratio": a["echoed"] / max(1, a["n"]),
                 **{"ac_" + k: float(np.nan_to_num(np.clip(c.get("ac", {}).get(k, 0.0), -300, 300))) for k in AC_KEYS},
                 "agent_slope": c.get("agent_slope", 0.0),
-                "sem_p": c.get("sem", -1.0) if c.get("sem") is not None else -1.0}
+                "sem_p": c.get("sem", -1.0) if c.get("sem") is not None else -1.0,
+                "pre_onset": int(bool(c.get("pre_onset")))}
 
     def score(self, f: dict) -> tuple[float, str]:
         """P(the caller wants the floor). Learned weights if available, else transparent rules."""
@@ -356,6 +382,8 @@ class TurnTaker:
             return 1.0, "floor-bid word"
         if f["repeated_ambig"]:
             return 0.9, "«خلاص/طيب» with more after it"
+        if PRE_ONSET_RULE and f.get("pre_onset") and f["content"] >= 1 and f["logprob"] >= MIN_LOGPROB:
+            return 0.85, "the caller was already talking when the agent started"
         if f.get("option", 0) >= 1 and (f.get("choice") or (not f.get("just_said") and (
                 f.get("accept") or f.get("early") or f.get("opt_prev")))):
             return 0.85, "answers the agent's question with an option it offered"
@@ -450,7 +478,10 @@ class TurnTaker:
             if t is None:
                 self.cand_id += 1
                 t = self.turn = {"id": self.cand_id, "start": self.ms - 120, "last": self.ms, "text": "", "done": False,
-                                 "sub": -1e9, "voiced": 0}
+                                 "sub": -1e9, "voiced": 0, "burst_start": self.ms - 120, "burst_voiced": 0}
+            elif self.ms - t["last"] > PRE_ONSET_MS:
+                t["burst_start"], t["burst_voiced"] = self.ms - 120, 0     # F3: a new burst after a pause
+            t["burst_voiced"] = t.get("burst_voiced", 0) + FRAME_MS
             t["done"] = False                  # they carried on: the turn (and its transcript) continues
             t["last"] = self.ms
             t["voiced"] += FRAME_MS
