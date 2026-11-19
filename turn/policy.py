@@ -64,6 +64,8 @@ RESUME_MS = 460          # take a stop back only inside this window (the scorer 
 RESUME_GAP_MS = 120      # ...once the sound has ended for this long...
 RESUME_MAX_VOICED_MS = 1200  # ...it was short...
 RESUME_P = 0.3           # ...and the full reading says it was not a floor bid
+OPTION_ANSWER = 1        # F2: picking an option the agent offered is a floor bid, not an echo
+OPTION_EARLY_MS = 400    # ...a candidate that opened this soon after the agent started counts as an answer
 
 _MODELS = Path(__file__).resolve().parents[1] / "models"
 # the learned layer is trained on the words of ONE ASR engine, so each engine has its own weights
@@ -278,6 +280,25 @@ class TurnTaker:
         k = min(len(words), int((self.ms - self.agent_start_ms) / 1000 * 2.6) + 2)
         return " ".join((self.prev_agent_text.split() + words[:k])[-24:])
 
+    def _option_feats(self, text: str, c: dict) -> dict:
+        """F2: does the caller pick one of the options the agent offered (previous utterance, or what it has said so
+        far)? Not counted when the word is only the one the agent is saying right now (a supportive repeat)."""
+        if not OPTION_ANSWER:
+            return {}
+        words = self.agent_text.split()
+        k = min(len(words), int((self.ms - self.agent_start_ms) / 1000 * 2.6) + 2)
+        heard = " ".join(words[:k])
+        prev_opts = lexicon.offered_options(self.prev_agent_text)
+        cur_opts = lexicon.offered_options(heard)
+        oa = lexicon.option_answer(text, prev_opts | cur_opts)
+        if not oa["option"]:
+            return {"option": 0}
+        recent = {lexicon._stem(lexicon.norm(w)) for w in words[max(0, k - 4):k]}
+        hit_stems = {lexicon._stem(h) for h in oa["hits"]}
+        return {"option": oa["option"], "choice": int(oa["strong"]), "accept": int(oa["accept"]),
+                "opt_prev": int(bool(hit_stems & prev_opts)), "just_said": int(hit_stems <= recent),
+                "early": int(c["start"] - self.agent_start_ms <= OPTION_EARLY_MS)}
+
     def _cand_rel(self, c) -> float:
         return float(np.percentile(c["levels"], 80)) - self.ref_db if c["levels"] else -99.0
 
@@ -335,6 +356,9 @@ class TurnTaker:
             return 1.0, "floor-bid word"
         if f["repeated_ambig"]:
             return 0.9, "«خلاص/طيب» with more after it"
+        if f.get("option", 0) >= 1 and (f.get("choice") or (not f.get("just_said") and (
+                f.get("accept") or f.get("early") or f.get("opt_prev")))):
+            return 0.85, "answers the agent's question with an option it offered"
         if f["content"] >= CONTENT_MIN and has_sem and sem < SEM_LO and (not self.model or self._model_p(f) < 0.5):
             return 0.2, f"words, but the meaning is not for the agent (meaning p={sem:.2f})"
         if has_sem and sem >= SEM_HI and f["n"] >= 2 and f["logprob"] >= MIN_LOGPROB and f["rel_db"] >= -3.0 \
@@ -371,6 +395,7 @@ class TurnTaker:
             c["spk"] = float(np.dot(res["spk"], self.ref_emb))
         a = lexicon.analyse(text, self.agent_text)
         f = self._features(a, c)
+        f.update(self._option_feats(text, c))
         c["text"], c["feats"] = text, f
         p, why = self.score(f)
         self._log("asr", text=text, ms=round(ms), p=round(p, 2), why=why, rel_db=round(f["rel_db"], 1), f=f,

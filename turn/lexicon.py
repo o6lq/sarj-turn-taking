@@ -209,6 +209,70 @@ ARABIC_DIGITS.update({"تلاته": 3, "اتنين": 2, "تنين": 2, "تمان
 NUMBER_WORDS = {"واحد": 1, "اثنين": 2, "ثلاث": 3, "اربع": 4, "خمس": 5, "ست": 6, "سبع": 7, "ثمان": 8, "تسع": 9, "عشر": 10}
 
 
+OFFER_CUES = {norm(w) for w in "تحب تحبين تبي تبين تبغى تبغين يناسبك يناسب تفضل تفضلين ودك تختار تختارين ولا او اختار ايهم أيهما".split()}
+WEEKDAYS = {norm(w) for w in "السبت الاحد الأحد الاثنين الإثنين الثلاثاء الثلاثا الاربعاء الأربعاء الاربعا الخميس الجمعه الجمعة".split()}
+DAYPARTS = {norm(w) for w in "الصبح الصباح صباحا صباحي صباحيه الصباحيه الصباحية الظهر الضهر العصر المغرب العشا العشاء الليل المسا المساء مسائي مسائيه المسائيه المسائية الضحى بكره بكرة اليوم".split()}
+OPTION_HEADS = {norm(w) for w in "باقه الباقه باقة الباقة خطه الخطه فرع الفرع موعد الموعد يوم".split()}
+STRONG_CHOICE = {norm(w) for w in "زين احسن أحسن خلني خليني احجز احجزه احجزها احجزلي ابي أبي ابغى أبغى ابغي ودي يناسبني مناسب افضل أفضل اخذ آخذ ناخذ اختار أختار".split()}
+ACCEPT = {norm(w) for w in "ايه إيه ايوه أيوه نعم تمام اوكي ماشي طيب".split()}
+_STOP_OPT = {norm(w) for w in "من في على الى إلى عن مع اللي ان إن او أو ولا و يا هذا هذي ذا".split()}
+
+
+def asks_or_offers(text: str) -> bool:
+    """The agent asked something or offered a choice («تحب…؟», «الصبح ولا العصر»): an answer may follow at once."""
+    if "؟" in (text or "") or "?" in (text or ""):
+        return True
+    return any(w in OFFER_CUES for w in norm(text).split())
+
+
+def _stem(w: str) -> str:
+    for pre in ("وبال", "بال", "وال", "ال", "و", "ب"):
+        if w.startswith(pre) and len(w) - len(pre) >= 3:
+            w = w[len(pre):]
+            break
+    return w[:-1] if len(w) >= 4 and w.endswith(("ه", "ي")) else w
+
+
+def offered_options(*agent_texts: str) -> set[str]:
+    """Option slots the agent offered in an utterance that asks or offers: weekdays, parts of the day, the word after
+    «باقة/فرع/موعد/يوم», and the words on both sides of «أو/ولا». Returned as stems."""
+    out: set[str] = set()
+    for text in agent_texts:
+        if not text or not asks_or_offers(text):
+            continue
+        ws = norm(text).split()
+        for i, w in enumerate(ws):
+            if w in WEEKDAYS or w in DAYPARTS:
+                out.add(_stem(w))
+            if (w in OPTION_HEADS or (w.startswith("و") and w[1:] in OPTION_HEADS)) and i + 1 < len(ws) and ws[i + 1] not in _STOP_OPT and ws[i + 1] not in BID \
+                    and ws[i + 1] not in OFFER_CUES and ws[i + 1] not in BACKCHANNEL:
+                out.add(_stem(ws[i + 1]))
+            if w in ("او", "ولا"):
+                for step in (-1, 1):                  # nearest real word on each side, past «من/في/يوم…»
+                    j = i + step
+                    while 0 <= j < len(ws) and abs(j - i) <= 3 and (ws[j] in _STOP_OPT or ws[j] == "يوم"):
+                        j += step
+                    if 0 <= j < len(ws) and len(ws[j]) >= 3 and ws[j] not in BID and ws[j] not in BACKCHANNEL \
+                            and ws[j] not in OFFER_CUES:
+                        out.add(_stem(ws[j]))
+    return out
+
+
+def option_answer(caller_text: str, options: set[str]) -> dict:
+    """Does the caller pick one of the offered options? {option: n words that are options, strong: a choice word
+    («زين», «أحسن», «خلني»), accept: an acceptance word («إيه», «تمام»)}."""
+    from difflib import SequenceMatcher
+    ws = [squeeze(w) for w in norm(caller_text).split()]
+    n = 0
+    hits = []
+    for w in ws:
+        st = _stem(w)
+        if len(st) >= 3 and any(st == o or (abs(len(st) - len(o)) <= 2 and SequenceMatcher(None, st, o).ratio() >= 0.8) for o in options):
+            n += 1
+            hits.append(w)
+    return {"option": n, "hits": hits, "strong": any(w in STRONG_CHOICE for w in ws), "accept": any(w in ACCEPT for w in ws)}
+
+
 def count_digits(text: str) -> int:
     t = norm(text)
     n = sum(1 for w in t.split() if w in ARABIC_DIGITS or w.lstrip("و") in ARABIC_DIGITS)
