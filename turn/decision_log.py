@@ -141,7 +141,7 @@ def traces_by_call(lines: list[dict]) -> dict[int, list[dict]]:
             continue
         tr = {"t": r.get("t"), "kind": r.get("kind"), "why": r.get("why", ""), "text": r.get("text", ""),
               "f": {k: r[k] for k in FEATURE_KEYS if k in r}}
-        for k in ("p", "ms", "agent_active", "stopped", "agent_utt"):
+        for k in ("p", "ms", "agent_active", "stopped", "agent_utt", "cand_start", "level_rel", "cand"):
             if k in r:
                 tr[k] = r[k]
         out.setdefault(c, []).append(tr)
