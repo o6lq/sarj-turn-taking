@@ -64,6 +64,8 @@ RESUME_MS = 460          # take a stop back only inside this window (the scorer 
 RESUME_GAP_MS = 120      # ...once the sound has ended for this long...
 RESUME_MAX_VOICED_MS = 1200  # ...it was short...
 RESUME_P = 0.3           # ...and the full reading says it was not a floor bid
+RESUME_GAP_BC_MS = 280   # F1: after a backchannel opener («إيه، …») wait longer: an answer often follows a pause
+RESUME_SAFE = 1          # F1: no RESUME after an agent question/offer, and only after 80 ms with no voice at all
 
 _MODELS = Path(__file__).resolve().parents[1] / "models"
 # the learned layer is trained on the words of ONE ASR engine, so each engine has its own weights
@@ -140,6 +142,7 @@ class TurnTaker:
         self.stop_info = None                # the last STOP, watched for a quick RESUME
         self.prev_agent_text = ""
         self.agent_utt = 0
+        self.vad_recent = deque(maxlen=4)  # VAD p of the last 80 ms
 
     def on_scenario_start(self, context: dict | None = None):
         self.reset_call()
@@ -187,6 +190,7 @@ class TurnTaker:
         raw_db = 20 * np.log10(np.sqrt(np.mean(caller.astype(np.float64) ** 2)) / 32768 + 1e-9)
         resid_db, echo_db = self.echo.process(agent, caller, self.agent_active)
         p = self.vad.push(caller)
+        self.vad_recent.append(p)
         self.ring.append(caller.copy())
         self.agent_ring.append(agent.copy())
         if p < 0.3:
@@ -393,7 +397,11 @@ class TurnTaker:
             c["voiced"] += FRAME_MS
             c["last"] = self.ms
             return
-        if not s["final"] and self.ms - c["last"] >= RESUME_GAP_MS and c["voiced"] <= RESUME_MAX_VOICED_MS:
+        gap = RESUME_GAP_MS
+        if RESUME_SAFE and lexicon.norm(c.get("text", "")).split()[:1] and \
+                lexicon.norm(c.get("text", "")).split()[0] in lexicon.BACKCHANNEL:
+            gap = RESUME_GAP_BC_MS
+        if not s["final"] and self.ms - c["last"] >= gap and c["voiced"] <= RESUME_MAX_VOICED_MS:
             if self.asr.submit(("final", c["id"], self.ms), (self._audio_since(c["start"]), self.heard_context())):
                 s["final"] = True
 
@@ -403,7 +411,10 @@ class TurnTaker:
         if s is None or not self.stopped or not speaking or self.ms - s["t"] > RESUME_MS + 30:
             return None
         sem = f.get("sem_p", -1.0)
-        if p < RESUME_P and f["bid"] == 0 and (sem < 0 or sem < SEM_LO) and self.ms - (self.cand or {}).get("last", 0) >= 60:
+        unsafe = RESUME_SAFE and (lexicon.asks_or_offers(self.heard_context()) or max(self.vad_recent, default=0) >= 0.3)
+        if unsafe:
+            self._log("resume_blocked", why="agent asked/offered, or the caller's voice is still there")
+        if not unsafe and p < RESUME_P and f["bid"] == 0 and (sem < 0 or sem < SEM_LO) and self.ms - (self.cand or {}).get("last", 0) >= 60:
             self.stopped, self.stop_info, self.cand = False, None, None
             self._log("RESUME", why=f"it was not a floor bid after all: {why}")
             return {"decision": "RESUME", "label": "backchannel", "confidence": 0.7}

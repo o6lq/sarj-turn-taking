@@ -209,6 +209,16 @@ ARABIC_DIGITS.update({"تلاته": 3, "اتنين": 2, "تنين": 2, "تمان
 NUMBER_WORDS = {"واحد": 1, "اثنين": 2, "ثلاث": 3, "اربع": 4, "خمس": 5, "ست": 6, "سبع": 7, "ثمان": 8, "تسع": 9, "عشر": 10}
 
 
+OFFER_CUES = {norm(w) for w in "تحب تحبين تبي تبين تبغى تبغين يناسبك يناسب تفضل تفضلين ودك تختار تختارين ولا او اختار وش رايك ايش رايك ايهم أيهما".split()}
+
+
+def asks_or_offers(text: str) -> bool:
+    """The agent asked something or offered a choice («تحب…؟», «الصبح ولا العصر»): an answer may follow at once."""
+    if "؟" in (text or "") or "?" in (text or ""):
+        return True
+    return any(w in OFFER_CUES for w in norm(text).split())
+
+
 def count_digits(text: str) -> int:
     t = norm(text)
     n = sum(1 for w in t.split() if w in ARABIC_DIGITS or w.lstrip("و") in ARABIC_DIGITS)
