@@ -20,7 +20,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import acoustic, clock, lexicon, semantic
+from . import acoustic, clock, decision_log, lexicon, semantic
 from . import asr as _asr
 from .echo import EchoSuppressor
 from .vad import SileroVAD
@@ -108,6 +108,8 @@ class TurnTaker:
         self.echo = EchoSuppressor()
         self.model = _load_model() if USE_MODEL else None
         self.trace: list = []          # what happened and why (for the dashboard)
+        self.dlog = decision_log.get()  # TT_DECISION_LOG: the same events on disk, without audio (off by default)
+        self.call_no = 0
         self.reset_call()
 
     # ------------------------------------------------------------------ call / agent events
@@ -137,9 +139,13 @@ class TurnTaker:
         self.calibrating = False             # live demo: the caller says a few words before the agent starts
         self.stop_info = None                # the last STOP, watched for a quick RESUME
         self.prev_agent_text = ""
+        self.agent_utt = 0
 
-    def on_scenario_start(self):
+    def on_scenario_start(self, context: dict | None = None):
         self.reset_call()
+        if self.dlog:
+            self.call_no = self.dlog.next_call()
+            self.dlog.event({"call": self.call_no, "t": 0, "kind": "call_start", "use_case": (context or {}).get("use_case", "")})
 
     def on_agent_start(self, text: str):
         self.prev_agent_question = self.agent_text.strip().endswith(("؟", "?")) if self.agent_text else False
@@ -147,10 +153,16 @@ class TurnTaker:
         self.agent_active, self.agent_text, self.stopped = True, text, False
         self.agent_start_ms = self.ms
         self.turn = None
+        self.agent_utt += 1
+        if self.dlog:
+            self.dlog.event({"call": self.call_no, "t": self.ms, "kind": "agent_start", "agent_utt": self.agent_utt,
+                             "is_question": text.strip().endswith(("؟", "?")), "n_words": len(text.split()), "agent_text": text})
 
     def on_agent_end(self):
         self.agent_active = False
         self.agent_end_ms = self.ms
+        if self.dlog:
+            self.dlog.event({"call": self.call_no, "t": self.ms, "kind": "agent_end", "agent_utt": self.agent_utt})
 
     # ------------------------------------------------------------------ helpers
     def _floor_db(self) -> float:
@@ -163,6 +175,10 @@ class TurnTaker:
 
     def _log(self, kind: str, **kw):
         self.trace.append({"t": self.ms, "kind": kind, **kw})
+        if self.dlog:
+            self.dlog.record(self.call_no, self.ms, kind, kw,
+                             {"agent_active": self.agent_active, "stopped": self.stopped, "agent_utt": self.agent_utt,
+                              "since_agent_start_ms": self.ms - self.agent_start_ms, "cand": (self.cand or {}).get("id")})
 
     # ------------------------------------------------------------------ every 20 ms
     def on_frame(self, agent: np.ndarray, caller: np.ndarray):
