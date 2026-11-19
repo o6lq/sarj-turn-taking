@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="ar" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>تسريع رد الوكيل</title>
+<style>
+:root{--bg:#f7f6f3;--card:#fff;--ink:#1b1b1b;--muted:#666;--line:#e4e1db;--acc:#3e3aa8;--soft:#ecebfa;--g:#2e9b63;--r:#d64045;--a:#c98a10;
+--wait:#cfd3dc;--brain:#8f8ce0;--voice:#e0a33c;--sound:#2e9b63;--gs:#eaf7ef;--as:#fff4e5;--rs:#fdecef}
+@media (prefers-color-scheme:dark){:root{--bg:#121214;--card:#1c1c20;--ink:#ececec;--muted:#a0a0a8;--line:#30303a;--acc:#a9a6ff;--soft:#26254a;
+--wait:#3a3e48;--brain:#6c69c9;--voice:#b07f2a;--sound:#3fb979;--gs:#16301f;--as:#352a14;--rs:#381a20}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,"SF Arabic","Geeza Pro",Tahoma,sans-serif;line-height:1.85;font-size:15.5px}
+.w{max-width:980px;margin:0 auto;padding:26px 16px 80px}
+header{background:var(--acc);color:#fff;border-radius:18px;padding:24px 22px}@media (prefers-color-scheme:dark){header{color:#111}}
+header h1{margin:0 0 4px;font-size:26px}
+h2{font-size:21px;margin:36px 0 8px;border-bottom:2px solid var(--line);padding-bottom:4px}
+h3{font-size:17px;margin:4px 0 6px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px 18px;margin:10px 0}
+.g{background:var(--gs)}.am{background:var(--as)}.rd{background:var(--rs)}
+table{border-collapse:collapse;width:100%;font-size:14px;background:var(--card)}th,td{border:1px solid var(--line);padding:7px 9px;text-align:right;vertical-align:top}th{background:var(--soft)}
+.tw{overflow-x:auto}
+.muted{color:var(--muted)}code{background:var(--soft);padding:1px 5px;border-radius:5px;direction:ltr;unicode-bidi:isolate;font-size:12.5px}
+.ok{color:var(--g);font-weight:700}.pl{color:var(--a);font-weight:700}.no{color:var(--r);font-weight:700}
+.num{display:inline-flex;width:30px;height:30px;border-radius:50%;background:var(--acc);color:#fff;align-items:center;justify-content:center;font-weight:800;margin-left:8px;flex:none}
+@media (prefers-color-scheme:dark){.num{color:#111}}
+.row{display:flex;align-items:flex-start;gap:4px}
+.ex{border-right:3px solid var(--acc);padding:4px 12px;margin:8px 0;background:var(--soft);border-radius:6px}
+/* timeline */
+.tl{margin:14px 0 4px}.tl .lab{font-weight:700;margin:12px 0 4px}
+.bar{display:flex;height:34px;border-radius:8px;overflow:hidden;direction:ltr;border:1px solid var(--line)}
+.bar div{display:flex;align-items:center;justify-content:center;font-size:12px;white-space:nowrap;overflow:hidden;color:#111}
+.wait{background:var(--wait)}.brain{background:var(--brain)}.voice{background:var(--voice)}.sound{background:var(--sound);color:#fff!important}
+.axis{display:flex;justify-content:space-between;direction:ltr;font-size:11.5px;color:var(--muted);margin-top:2px}
+.legend{display:flex;flex-wrap:wrap;gap:14px;font-size:13px;margin-top:8px}.legend span::before{content:"";display:inline-block;width:12px;height:12px;border-radius:3px;margin-left:5px;vertical-align:-1px;background:var(--c)}
+.big{font-size:28px;font-weight:800}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px}
+</style></head><body><div class="w">
+
+<header><h1>تسريع رد الوكيل بدون ما تنزل الجودة</h1>
+<div>وش تغيّر، وليش، وكيف تجرّبه بنفسك · فرع <code>demo/day6</code> · 19 نوفمبر 2026</div></header>
+
+<div class="card am" style="margin-top:16px"><b>قبل كل شي:</b> هذي التعديلات <b>مكتوبة ومختبرة باختبارات</b>، لكن <b>ما انقاست على مكالمات حقيقية</b>
+لأن جهاز التعديل ما فيه النماذج ولا المفاتيح. الأرقام اللي تحت "بعد" <b>تقديرات</b> لين تشغّل القياس على جهاز العرض (قسم «كيف تجرّب»).
+ولا شي منها في <code>main</code> للحين: هي في فرع <code>demo/day6</code>، وتنتقل للماين لما توافق.</div>
+
+<h2>المشكلة باختصار</h2>
+<p>لما العميل يخلّص كلامه، الوكيل يمر بأربع مراحل قبل ما تسمع صوته:</p>
+<ol>
+<li><b>ينتظر ٠٫٦ ثانية سكوت</b> عشان يتأكد إن العميل خلص فعلاً (هذا جزء من نموذج المسابقة، ومجمّد ما نقدر نلمسه).</li>
+<li><b>العقل (Gemini)</b> يكتب الرد.</li>
+<li><b>الصوت</b> يحوّل النص لكلام.</li>
+<li><b>الشبكة</b> توصل الصوت.</li>
+</ol>
+<p>آخر قياس: نص الردود يوصل أول صوتها بعد <b>١٫٣٩ ث</b> من نهاية الانتظار، و١٠٪ منها تتأخر أكثر من <b>٤٫٥ ث</b>. يعني الإجمالي من سكوت العميل تقريباً <b>ثانيتين</b>.</p>
+
+<h2>الصورة: قبل وبعد (رد عادي)</h2>
+<div class="card">
+<div class="tl">
+<div class="lab">قبل</div>
+<div class="bar">
+  <div class="wait" style="width:30%">انتظار ٦٠٠</div>
+  <div class="voice" style="width:8%">اتصال</div>
+  <div class="brain" style="width:40%">العقل + الصوت</div>
+  <div class="sound" style="width:22%">🔊</div>
+</div>
+<div class="axis"><span>0</span><span>0.5 ث</span><span>1.0</span><span>1.5</span><span>2.0 ث</span></div>
+
+<div class="lab">بعد (تقدير)</div>
+<div class="bar">
+  <div class="wait" style="width:15%">سكوت ٣٠٠</div>
+  <div class="brain" style="width:15%;opacity:.55">يكتب بصمت</div>
+  <div class="brain" style="width:24%">العقل + الصوت</div>
+  <div class="sound" style="width:46%">🔊 يسمع الرد أبكر</div>
+</div>
+<div class="axis"><span>0</span><span>0.5 ث</span><span>1.0</span><span>1.5</span><span>2.0 ث</span></div>
+</div>
+<div class="legend">
+<span style="--c:var(--wait)">انتظار سكوت العميل</span>
+<span style="--c:var(--voice)">فتح اتصال بالإنترنت</span>
+<span style="--c:var(--brain)">العقل والصوت يشتغلون</span>
+<span style="--c:var(--sound)">العميل يسمع الوكيل</span>
+</div>
+<p class="muted" style="margin:10px 0 0">الفكرة: الانتظار نفسه ما تغيّر (٦٠٠ ms)، لكن الشغل صار يبدأ <b>وسط</b> الانتظار بدل ما يبدأ بعده، وفتح الاتصال صار يصير مرة وحدة أول المكالمة.</p>
+</div>
+
+<div class="kpis">
+<div class="card"><div class="muted">التوفير المتوقع من الرد المسبق</div><div class="big">لين ٣٠٠ ms</div></div>
+<div class="card"><div class="muted">من إبقاء الاتصال مفتوح</div><div class="big">١٠٠–٣٠٠ ms</div></div>
+<div class="card"><div class="muted">تغيير في كلام الوكيل</div><div class="big ok">صفر</div></div>
+</div>
+
+<h2>وش حسّنت (٤ تعديلات)</h2>
+
+<div class="card"><div class="row"><span class="num">١</span><div>
+<h3>الرد المسبق: يبدأ يفكّر وأنت ساكت</h3>
+<p>قبل: الوكيل ينتظر ٠٫٦ ث كاملة، <b>وبعدها</b> يبدأ يكتب الرد.<br>
+بعد: إذا سكت العميل ٠٫٣ ث وجملته <b>كاملة</b>، العقل يبدأ يكتب الرد والصوت يتجهّز، <b>بس ما يطلع أي صوت</b>. لما يقرر النموذج إن العميل خلص (عند ٠٫٦ ث)، الرد يكون جاهز ويطلع فوراً.</p>
+<div class="ex">مثل موظف يسمعك تقول «كم المبلغ؟» ويبدأ يفتح الملف وهو ينتظرك تكمّل، بدل ما يفتحه بعد ما تخلص.</div>
+<p><b>لو العميل رجع يتكلم؟</b> الرد المسبق ينرمي كأنه ما صار، والوكيل يرد على الجملة الكاملة بعدين.</p>
+<p><b>ليش ما تنزل الجودة:</b> الرد ينكتب من <b>نفس الكلام ونفس سجل المكالمة</b>، فهو نفس الرد بالضبط بس أبكر. وقرار «متى يرد» ما تغيّر أبداً، لأن نموذج المسابقة مجمّد.
+وما يبدأ أصلاً إذا الجملة ناقصة (تنتهي بـ«و» أو «يعني» أو «بس»)، أو إذا الوكيل سأل عن رقم والعميل ما كمّله.</p>
+<p class="muted">الملف: <code>convo/engine.py</code> · للإيقاف: <code>TT_SPECULATE_MS=0</code></p>
+</div></div></div>
+
+<div class="card"><div class="row"><span class="num">٢</span><div>
+<h3>الاتصال يبقى مفتوح</h3>
+<p>قبل: كل رد يفتح اتصال آمن جديد مع Gemini ومع ElevenLabs، وهذا ياخذ رحلة أو رحلتين للسيرفر قبل أول حرف.<br>
+بعد: الاتصال ينفتح مرة وحدة <b>أول المكالمة</b> ويبقى مفتوح للردود كلها. ولو السيرفر قفله، يفتح واحد جديد تلقائياً.</p>
+<div class="ex">مثل إنك تخلي خط الهاتف مفتوح بدل ما تتصل من جديد كل ما تبي تقول جملة.</div>
+<p><b>ليش ما تنزل الجودة:</b> نفس الطلب ونفس الرد، اللي تغيّر الطريق بس.</p>
+<p class="muted">الملفات: <code>convo/http_pool.py</code> (جديد)، <code>convo/brain.py</code>، <code>convo/voice.py</code></p>
+</div></div></div>
+
+<div class="card"><div class="row"><span class="num">٣</span><div>
+<h3>أول جملة تبدأ عند الفاصلة</h3>
+<p>قبل: الصوت ينتظر لين تخلص الجملة الأولى كلها (لين النقطة).<br>
+بعد: إذا أول جزء وصل لفاصلة وطوله ٢٤ حرف أو أكثر، الصوت يبدأ فيه والباقي لسا ينكتب.</p>
+<div class="ex">«أبشر، الدفعة ثلاث مية وخمسين ريال، ← يبدأ يقولها هنا» … «وتقدر تسددها من التطبيق.»</div>
+<p><b>ليش ما تنزل الجودة:</b> الفاصلة مكان يوقف فيه الإنسان أصلاً، وكلمة قصيرة مثل «أبشر،» ما تنقال لحالها. وهذا لأول جزء بس.
+هذا التعديل الوحيد اللي ممكن <b>تسمع</b> فيه فرق بسيط بالنبرة، فاسمعه بنفسك في التجربة.</p>
+<p class="muted">يشتغل مع صوت Edge وElevenLabs (صوت Gemini المباشر يبث الصوت أصلاً) · للإيقاف: <code>TT_FIRST_CLAUSE_CHARS=9999</code></p>
+</div></div></div>
+
+<div class="card"><div class="row"><span class="num">٤</span><div>
+<h3>عدّاد يقول وين راح الوقت</h3>
+<p>قبل: كنا نعرف الرقم الإجمالي بس.<br>
+بعد: صفحة العرض تكتب تحت «أول كلمة بالرد» تفصيل آخر رد، مثلاً:</p>
+<div class="ex"><code>الكل 1350 · سكوت 600 · العقل 420 · بدأ مبكر 280</code></div>
+<p>وكل مكالمة تنحفظ معها هالأرقام، فنعرف بالضبط وش نحسّن بعدها.</p>
+<p class="muted">الملفات: <code>convo/engine.py</code>، <code>demo/index.html</code></p>
+</div></div></div>
+
+<h2>وش ما تغيّر (مهم للمسابقة)</h2>
+<div class="card g">
+<ul style="margin:0">
+<li>نموذج المسابقة (<code>turn/</code>، <code>my_system.py</code>، <code>models/</code>) <b>ما انلمس</b>: الفرق مع نسخة التجميد <code>v2.0-freeze</code> صفر، وفيه اختبار يتأكد من هذا.</li>
+<li>متى يوقف الوكيل، ومتى يكمّل، ومتى يرد: <b>نفس القرارات بالضبط</b>.</li>
+<li>كلام الوكيل وأسلوبه ومعلوماته: نفسها.</li>
+</ul></div>
+
+<h2>الاختبارات</h2>
+<div class="tw"><table>
+<tr><th>الاختبار</th><th>النتيجة</th></tr>
+<tr><td>الرد المسبق ما يطلع صوته قبل ما يخلص العميل</td><td class="ok">نجح</td></tr>
+<tr><td>الرد المسبق ينرمي لو العميل كمّل كلامه، وسجل المكالمة ما يتأثر</td><td class="ok">نجح</td></tr>
+<tr><td>ما فيه رد مسبق لجملة ناقصة، أو لسكوت أقصر من ٠٫٣ ث</td><td class="ok">نجح</td></tr>
+<tr><td>الاتصال ينعاد استخدامه (٣ طلبات = اتصال واحد)، والتسخين ما يطيّح لو النت مقطوع</td><td class="ok">نجح</td></tr>
+<tr><td>تقسيم الفاصلة ما يقطع كلمة قصيرة، وما يضيّع ولا حرف</td><td class="ok">نجح</td></tr>
+<tr><td>اختبارات المشروع القديمة</td><td><span class="ok">٧٣ نجحت</span> · <span class="pl">٣ فشلت</span> وكانت تفشل قبل تعديلاتي، لأن بايثون على جهاز التعديل 3.9 والمشروع مبني على 3.12</td></tr>
+<tr><td>مكالمات حقيقية بالمايك</td><td class="pl">ما انقاست للحين: هذي عليك</td></tr>
+</table></div>
+
+<h2>كيف تجرّب بنفسك (١٥ دقيقة)</h2>
+<div class="card">
+<ol style="margin:0">
+<li>على جهاز العرض:
+<div class="ex" style="direction:ltr;text-align:left"><code>git fetch &amp;&amp; git checkout demo/day6 &amp;&amp; source .venv/bin/activate &amp;&amp; pytest -q</code></div></li>
+<li>شغّل الديمو (<code>python -m tools.live</code>)، وسوّ <b>٥ مكالمات</b> بسماعة رأس. اسأل أسئلة عادية مثل «كم المبلغ؟» و«متى آخر موعد؟». شوف رقم «أول كلمة بالرد» والتفصيل تحته.</li>
+<li>بعدها حط <code>TT_SPECULATE_MS=0</code> و<code>TT_FIRST_CLAUSE_CHARS=9999</code> في <code>.env</code>، وسوّ نفس الـ٥ مكالمات. هذي «قبل».</li>
+<li>قارن: هل الرد أسرع؟ وهل الكلام طبيعي مثل قبل؟</li>
+<li>تأكد إن العقل ما خرب: <code>python -m tools.brain_eval</code> لازم يطلع <b>١٢/١٢</b>.</li>
+</ol></div>
+
+<h2>الخطوات الجاية (بعد موافقتك)</h2>
+<div class="tw"><table>
+<tr><th>#</th><th>الخطوة</th><th>وش تعطينا</th></tr>
+<tr><td>S6</td><td>بث صوت ElevenLabs مباشر بدل طلب لكل جملة</td><td>أول صوت أسرع بكثير مع ElevenLabs</td></tr>
+<tr><td>S7</td><td>ضبط تقطيع صوت Gemini المباشر</td><td>تقريباً ١٠٠ ms، ويُعتمد بس إذا ما صار تقطيع بالصوت</td></tr>
+<tr><td>S8</td><td>الحشوات («أبشر»، «طيب») بصوت الشخصية</td><td>الانتظار يحس طبيعي</td></tr>
+<tr><td>S9</td><td>شخصية «طيف»: الجواب أول، وجمل قصيرة</td><td>أسرع وأطبع بنفس الوقت</td></tr>
+<tr><td>S10–S12</td><td>تقليل تفكير Gemini، بديل أسرع عند البطء، وفحص قبل العرض</td><td>أقل تذبذب</td></tr>
+<tr><td>S13</td><td>تقصير انتظار نهاية الدور</td><td>أكبر ربح باقي (٢٠٠ ms)، <b class="no">لكن بعد الحكم النهائي فقط</b> لأنه يلمس نموذج المسابقة</td></tr>
+</table></div>
+<p class="muted">التفاصيل الكاملة في <code>docs/PLAN_V3_SPEED.md</code>.</p>
+
+<h2>قرارك</h2>
+<div class="card">
+<p style="margin:0">لو عجبتك النتيجة، قل لي <b>«حطها في الماين»</b> وأدمج الفرع في <code>main</code> عن طريق طلب دمج (PR).
+ولو تبي، أقدر أدمج تعديل وأخلي الثاني (مثلاً الرد المسبق بدون تقسيم الفاصلة).
+وأي تعديل تقدر تقفله بسطر في <code>.env</code> بدون ما تغيّر أي كود.</p>
+</div>
+
+</div></body></html>

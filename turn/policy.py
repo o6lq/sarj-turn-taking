@@ -59,6 +59,7 @@ SEM_LO = 0.25            # content words whose meaning says «not for the agent�
 SEM_HI = 0.90            # meaning says «wants the floor» although no bid word was recognised
 SEM_REL_DB = 3.0         # ...and may overrule the learned veto only for 2+ words, about as loud as the caller...
 SEM_SPK = 0.35           # ...in a voice that matches the caller's voiceprint
+TURN_WINDOW_MS = 20000   # turn reads look at the last 20 s: shorter reads are faster, and 20 s still holds a dictated number
 RESUME_MS = 460          # take a stop back only inside this window (the scorer gives half credit within 500 ms)...
 RESUME_GAP_MS = 120      # ...once the sound has ended for this long...
 RESUME_MAX_VOICED_MS = 1200  # ...it was short...
@@ -92,9 +93,9 @@ class TurnTaker:
 
         def job(payload):
             audio, agent_text = payload if isinstance(payload, tuple) else (payload, None)
-            r = dict((asr_fn or transcribe)(audio))
+            r = dict(asr_fn(audio) if asr_fn else transcribe(audio, priority="normal" if agent_text is None else "urgent"))
             if agent_text is not None and USE_SEM and r.get("text"):
-                clean = lexicon._strip_speaker_label(r["text"])[0]
+                clean = lexicon.clean_asr(r["text"])[0]
                 r["sem"] = semantic.p_stop(agent_text, clean) if clean.strip() else None
             e = speaker.embed(audio[-16000 * 3:]) if USE_SPEAKER else None
             r["spk"] = e
@@ -339,6 +340,7 @@ class TurnTaker:
         if tag[0] == "turn":
             if self.turn is not None and tag[1] == self.turn["id"]:
                 self.turn["text"] = res.get("text", "")
+                self.turn["text_at"] = tag[2]       # when the audio of this read ended
                 self._log("asr_turn", text=self.turn["text"], ms=round(ms))
             return None
         c = self.cand
@@ -416,7 +418,7 @@ class TurnTaker:
             return None
         silence = self.ms - t["last"]
         if silence >= 160 and self.ms - t["sub"] > 400 and t["sub"] < t["last"]:
-            if self.asr.submit(("turn", t["id"], self.ms), self._audio_since(max(t["start"], self.ms - 29000))):
+            if self.asr.submit(("turn", t["id"], self.ms), self._audio_since(max(t["start"], self.ms - TURN_WINDOW_MS))):
                 t["sub"] = self.ms
         if EOT_SMART and silence >= 200 and t.get("pause_id") != t["last"]:
             t["pause_id"], t["p_complete"] = t["last"], None

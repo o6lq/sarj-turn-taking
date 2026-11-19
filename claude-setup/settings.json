@@ -41,7 +41,16 @@
       "Bash(tail:*)",
       "Bash(du:*)",
       "Bash(mkdir:*)",
-      "Bash(mv:*)"
+      "Bash(mv:*)",
+      "Write(.env.example)",
+      "Edit(.env.example)",
+      "Bash(python3:*)",
+      "Bash(.venv/bin/python:*)",
+      "Bash(lsof:*)",
+      "Bash(ps:*)",
+      "Bash(top -l 1:*)",
+      "Bash(vm_stat:*)",
+      "Bash(pmset -g:*)"
     ],
     "ask": [
       "Bash(rm:*)",
@@ -56,13 +65,14 @@
       "Edit(ttbench/**)",
       "Write(ttbench/**)",
       "Read(.env)",
-      "Read(.env.*)",
       "Bash(cat .env:*)",
       "Bash(git push origin main:*)",
       "Bash(git push --force:*)",
       "Bash(git push -f:*)",
       "Bash(git filter-branch:*)",
-      "Bash(rm -rf:*)"
+      "Bash(rm -rf:*)",
+      "Read(.env.local)",
+      "Read(.env.production)"
     ]
   }
 }

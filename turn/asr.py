@@ -38,7 +38,33 @@ FW_MODEL = os.environ.get("TT_FW_MODEL", "large-v3-turbo")       # faster-whispe
 MODEL = os.environ.get("TT_ASR_MODEL", str(EXT / "whisper-large-v3-turbo-q4"))
 PROMPT = os.environ.get("TT_ASR_PROMPT", "إيه، أها، مم، هيه، زين، طيب، لا لا، لحظة، اسمع، خلاص.")
 CACHE_DIR = KIT / ".cache" / "asr"
-_LOCK = threading.Lock()      # one Whisper call at a time (live demo: the turn-taker and the dialogue share it)
+class _PriorityLock:
+    """One decode at a time (MLX cannot run two), but a waiting interruption read goes before any waiting turn read."""
+
+    def __init__(self):
+        self._cv = threading.Condition()
+        self._busy = False
+        self._urgent_waiting = 0
+
+    def acquire(self, urgent: bool) -> None:
+        with self._cv:
+            self._urgent_waiting += urgent
+            try:
+                while self._busy or (not urgent and self._urgent_waiting):
+                    self._cv.wait()
+            finally:
+                self._urgent_waiting -= urgent
+            self._busy = True
+
+    def release(self) -> None:
+        with self._cv:
+            self._busy = False
+            self._cv.notify_all()
+
+
+_LOCK = _PriorityLock()       # live demo: the turn-taker and the dialogue share the model
+DECODER = "v3"                # part of the cache key: a change to decoding must not reuse old reads
+URGENT_STEPS, NORMAL_STEPS = 24, 48
 # Speed-up: Whisper always encodes 30 s of audio even for a 1 s «لحظة». With CTX_S > 0 we encode only a short
 # window (the encoder's positional embedding is sliced), which cuts the latency. 0 = standard Whisper.
 CTX_S = float(os.environ.get("TT_ASR_CTX", "10"))
@@ -48,7 +74,7 @@ _cache_on = os.environ.get("TT_ASR_CACHE", "1" if os.environ.get("TT_SIM") == "1
 def _key(audio: np.ndarray) -> str:
     h = hashlib.sha1(audio.tobytes())
     if BACKEND == "cohere":
-        h.update(COHERE.name.encode() + b"cohere-v1")
+        h.update(COHERE.name.encode() + b"cohere-v1" + DECODER.encode())
     elif BACKEND == "faster":
         h.update(FW_MODEL.encode() + PROMPT.encode() + b"fw-v1")
     else:
@@ -60,21 +86,29 @@ def warmup():
     transcribe(np.zeros(16000, np.int16), use_cache=False)
 
 
-def transcribe(audio_i16: np.ndarray, use_cache: bool = True) -> dict:
-    """Returns {"text": str, "ms": compute time}. Never raises. Thread-safe."""
-    with _LOCK:
-        return _transcribe(audio_i16, use_cache)
+def transcribe(audio_i16: np.ndarray, use_cache: bool = True, priority: str = "normal") -> dict:
+    """Returns {"text": str, "ms": compute time, "wait_ms": time waiting for the model}. Never raises. Thread-safe.
+    priority="urgent" for reads that decide whether to stop; they go before waiting turn reads."""
+    urgent = priority == "urgent"
+    t0 = time.perf_counter()
+    _LOCK.acquire(urgent)
+    wait_ms = round((time.perf_counter() - t0) * 1000, 1)
+    try:
+        out = _transcribe(audio_i16, use_cache, urgent)
+    finally:
+        _LOCK.release()
+    return {**out, "wait_ms": wait_ms}
 
 
-def _transcribe(audio_i16: np.ndarray, use_cache: bool = True) -> dict:
+def _transcribe(audio_i16: np.ndarray, use_cache: bool = True, urgent: bool = False) -> dict:
     if MODEL == "none":                       # acoustic-only mode (no words)
         return {"text": "", "no_speech": 1.0, "ms": 0.0}
-    key = _key(audio_i16)
+    key = _key(audio_i16) + ("u" if urgent and BACKEND == "cohere" else "")
     path = CACHE_DIR / key[:2] / f"{key}.json"
     if use_cache and _cache_on and path.exists():
         return json.loads(path.read_text(encoding="utf-8")) | {"cached": True}
     if BACKEND in ("cohere", "faster"):
-        out = _cohere(audio_i16) if BACKEND == "cohere" else _faster(audio_i16)
+        out = _cohere(audio_i16, URGENT_STEPS if urgent else NORMAL_STEPS) if BACKEND == "cohere" else _faster(audio_i16)
         if use_cache and _cache_on and "error" not in out:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
@@ -155,7 +189,17 @@ _coh = None
 _EMPTY = "فراغ"          # Cohere's own "no speech here" output (after a run of @ tokens)
 
 
-def _cohere(audio_i16: np.ndarray) -> dict:
+def _looping(ids: list[int]) -> bool:
+    """A pattern of 1-3 tokens repeated at least 3 times in a row: the decoder is stuck («هههه», «!!!!», «آآآآ»).
+    Two repeats are left alone, because people really say «لا لا» or «خمسة خمسة»."""
+    for p in (1, 2, 3):
+        n = max(6, 3 * p)
+        if len(ids) >= n and all(ids[-n + i] == ids[-n + i % p] for i in range(n)):
+            return True
+    return False
+
+
+def _cohere(audio_i16: np.ndarray, max_steps: int = NORMAL_STEPS) -> dict:
     """Greedy decode of Cohere Transcribe (same steps as mlx_audio's, batch 1), keeping each chosen token's
     log-probability so we get a confidence comparable to Whisper's avg_logprob."""
     global _coh
@@ -178,13 +222,15 @@ def _cohere(audio_i16: np.ndarray) -> dict:
         eos = m._tokenizer.eos_token_id
         ids, lps = [], []
         logits = head(hidden[:, -1:, :])[0, -1]
-        for step in range(48):
+        for step in range(max_steps):
             lp = logits - mx.logsumexp(logits)
             tok = int(mx.argmax(lp).item())
             if tok == eos:
                 break
             ids.append(tok)
             lps.append(float(lp[tok].item()))
+            if _looping(ids):
+                break
             hidden, cache = m.transf_decoder(mx.array([[tok]], dtype=mx.int32), enc, encoder_mask=enc_mask,
                                              cache=cache, start_pos=len(prompt) + step)
             logits = head(hidden)[0, -1]

@@ -2,13 +2,16 @@
 what the system decided, what it heard and how fast. You can label each try; labelled tries are saved as new
 calls in data/live (same format as the kit) so the next `tools.loop` scores the model on YOUR voice too.
 
-    .venv/bin/python -m tools.live          # opens http://127.0.0.1:8770
+    .venv/bin/python -m tools.live              # opens the demo; the try-out page is http://127.0.0.1:8790/
+    .venv/bin/python -m tools.live --manifest   # list every recording in data/live (after copying in teammates' files)
 """
 from __future__ import annotations
 
 import asyncio
 import io
 import json
+import os
+import re
 import sys
 import threading
 import time
@@ -23,9 +26,14 @@ import numpy as np
 KIT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(KIT))
 from ttbench.dataset import read_wav_stereo, write_wav_stereo  # noqa: E402
+from turn import config  # noqa: E402,F401  (loads .env)
 
 HTTP_PORT, WS_PORT = 8790, 8771   # 8770 is taken by macOS sharing (sharingd) on some Macs
 LIVE = KIT / "data" / "live"
+RECORDER = re.sub(r"[^A-Za-z0-9]", "", os.environ.get("TT_RECORDER", ""))[:10]   # who recorded: keeps ids unique across laptops
+RECORD_DIALECT = os.environ.get("TT_DIALECT", "live-user")
+RECORD_PLACE = os.environ.get("TT_PLACE", "live-mic")        # quiet, cafe, car, street, speakerphone ...
+LIVE_THRESHOLDS = {"T_full_ms": 300, "T_dead_ms": 1500, "E_full_ms": 600, "E_dead_ms": 2000, "E_miss_ms": 3000}
 
 
 def wav_bytes(x: np.ndarray) -> bytes:
@@ -125,6 +133,8 @@ class H(BaseHTTPRequestHandler):
             return self._send((KIT / "tools" / "live.html").read_bytes(), "text/html; charset=utf-8")
         if u.path == "/demo":
             return self._send((KIT / "demo" / "index.html").read_bytes(), "text/html; charset=utf-8")
+        if u.path == "/preflight":
+            return self._send(json.dumps(preflight(), ensure_ascii=False).encode(), "application/json")
         if u.path == "/results":
             return self._send(json.dumps(results(), ensure_ascii=False).encode(), "application/json")
         if u.path == "/scenarios":
@@ -244,6 +254,8 @@ async def _serve(ws):
             if msg.get("engine") != "live":
                 await voice.warm_fillers(SCEN_GENDER.get(msg.get("scenario", "payment"), "f"), msg.get("engine", "edge"))
             convo = Conversation(send, msg.get("scenario", "payment"), msg.get("engine", "edge"))
+            convo.mic = msg.get("mic")                    # the real microphone settings, kept with the session
+            convo.preflight = dict(LAST_PREFLIGHT) or None
             _active.update(ws=ws, convo=convo)
             await send({"type": "status", "state": "ready", "model": name})
             asyncio.create_task(convo.start())
@@ -329,14 +341,87 @@ def clarity(x: np.ndarray) -> dict:
             "level_db": round(float(20 * np.log10(np.sqrt(np.mean(y ** 2)) / 32768)), 1)}
 
 
+LAST_PREFLIGHT: dict = {}
+ASR_RED_MS, VOICE_RED_S, FREE_RED_GB = 250, 1.5, 3.0
+
+
+def _free_memory_gb() -> float | None:
+    """Memory that is free or quickly reclaimable, without extra packages."""
+    try:
+        import subprocess
+        if sys.platform == "darwin":
+            out = subprocess.run(["vm_stat"], capture_output=True, text=True, timeout=5).stdout
+            page = int(re.search(r"page size of (\d+)", out).group(1))
+            pages = sum(int(re.search(rf"{k}:\s+(\d+)", out).group(1)) for k in ("Pages free", "Pages inactive", "Pages speculative"))
+            return round(pages * page / 2 ** 30, 1)
+        if sys.platform.startswith("linux"):
+            return round(int(re.search(r"MemAvailable:\s+(\d+)", Path("/proc/meminfo").read_text()).group(1)) / 2 ** 20, 1)
+    except Exception:
+        return None
+    return None
+
+
+def _thermal() -> str | None:
+    if sys.platform != "darwin":
+        return None
+    import subprocess
+    out = subprocess.run(["pmset", "-g", "therm"], capture_output=True, text=True, timeout=5).stdout
+    limit = re.search(r"CPU_Speed_Limit\s*=\s*(\d+)", out)
+    if limit:
+        return "ok" if int(limit.group(1)) >= 100 else f"slowed to {limit.group(1)}%"
+    return "warning" if re.search(r"(?i)warning level", out) and not re.search(r"(?i)no thermal warning", out) else "ok"
+
+
+def preflight() -> dict:
+    """Is this laptop ready for a live demo right now?"""
+    from turn import asr, semantic
+    x = read_wav_stereo(KIT / "data" / "dev" / "audio" / "GI-D01.wav")[:, 1]
+    speech = x[16000:16000 * 4]
+    asr.transcribe(speech, use_cache=False)          # warm: the first read also loads the model
+    reads = sorted(asr.transcribe(speech, use_cache=False, priority="urgent")["ms"] for _ in range(5))
+    semantic.p_stop("هلا", "هلا")
+    t0 = time.perf_counter()
+    semantic.p_stop("حبيت أذكرك بالدفعة", "كم المبلغ")
+    meaning_ms = round((time.perf_counter() - t0) * 1000, 1)
+    voice_s = None
+    try:
+        from convo.live_voice import LiveVoice
+
+        async def first_sound():
+            v = LiveVoice("أنت موظف خدمة عملاء سعودي. رد بكلمة وحدة.", "f")
+            await v.connect()
+            t = time.perf_counter()
+            async for _ in v.speak("هلا"):
+                break
+            await v.close()
+            return round(time.perf_counter() - t, 2)
+        voice_s = asyncio.run(first_sound())
+    except Exception as e:
+        voice_s = f"failed: {type(e).__name__}"
+    free = _free_memory_gb()
+    result = {"time": time.strftime("%H:%M:%S"),
+              "asr_p90_ms": reads[-1], "asr_ok": reads[-1] <= ASR_RED_MS,
+              "meaning_ms": meaning_ms,
+              "voice_first_sound_s": voice_s, "voice_ok": isinstance(voice_s, float) and voice_s <= VOICE_RED_S,
+              "thermal": _thermal(), "free_memory_gb": free, "memory_ok": free is None or free >= FREE_RED_GB}
+    result["thermal_ok"] = result["thermal"] in (None, "ok")
+    result["all_ok"] = all(result[k] for k in ("asr_ok", "voice_ok", "memory_ok", "thermal_ok"))
+    LAST_PREFLIGHT.clear()
+    LAST_PREFLIGHT.update(result)
+    return result
+
+
 def save_try(fa, fc, agent_text, expected, agent_end_ms, trace):
     """Store a labelled try as a kit-format call. Onset/offset from the system's own voice detection;
     evident = onset + 500 ms (we do not know the exact moment, the label says so)."""
     LIVE.mkdir(parents=True, exist_ok=True)
     (LIVE / "audio").mkdir(exist_ok=True)
     (LIVE / "labels").mkdir(exist_ok=True)
-    n = len(list((LIVE / "labels").glob("*.json"))) + 1
-    sid = f"LV-{n:03d}"
+    prefix = f"LV-{RECORDER}-" if RECORDER else "LV-"
+    n = 1
+    while (LIVE / "labels" / f"{prefix}{n:03d}.json").exists():
+        n += 1
+    sid = f"{prefix}{n:03d}"
     pre = np.zeros(16000, np.int16)       # 1 s of silence before, so the call starts like the others
     a = np.concatenate([pre, np.concatenate(fa)])
     c = np.concatenate([pre, np.concatenate(fc)])
@@ -354,22 +439,30 @@ def save_try(fa, fc, agent_text, expected, agent_end_ms, trace):
     else:
         ev["window_end_ms"] = ev["offset_ms"] + 500
     lab = {"schema_version": "1.0", "scenario_id": sid, "split": "live", "category": "GI" if expected == "STOP" else "BC",
-           "subtype": "live", "difficulty": 2, "dialect": "live-user", "elicitation": "naturalistic",
+           "subtype": "live", "difficulty": 2, "dialect": RECORD_DIALECT, "elicitation": "naturalistic",
            "speakers": [{"speaker_id": "U", "role": "caller", "source": "live microphone"}],
-           "acoustic": {"conditions": ["live-mic"]},
+           "acoustic": {"conditions": [RECORD_PLACE]},
            "audio": {"file": f"{sid}.wav", "sample_rate": 16000, "channels": ["agent", "user"], "duration_ms": dur},
            "context": {"use_case": "live test", "language": "ar"},
            "agent_utterances": [{"utt_id": "A1", "start_ms": 1000, "end_ms": min(end_agent, dur - 10), "text": agent_text}],
            "user_segments": [], "events": [ev], "provenance": {"label_status": "user_labelled_live"}}
     (LIVE / "labels" / f"{sid}.json").write_text(json.dumps(lab, ensure_ascii=False, indent=1), encoding="utf-8")
-    ids = sorted(p.stem for p in (LIVE / "labels").glob("*.json"))
-    (LIVE / "manifest.json").write_text(json.dumps({"dataset": "live", "split": "live", "scenarios": [{"scenario_id": i} for i in ids],
-                                                    "thresholds": {"T_full_ms": 300, "T_dead_ms": 1500, "E_full_ms": 600, "E_dead_ms": 2000, "E_miss_ms": 3000}},
-                                                   ensure_ascii=False, indent=1))
+    write_live_manifest()
     return sid
 
 
+def write_live_manifest() -> int:
+    """List every labelled recording in data/live, for example after copying in a teammate's files."""
+    ids = sorted(p.stem for p in (LIVE / "labels").glob("*.json") if (LIVE / "audio" / f"{p.stem}.wav").exists())
+    (LIVE / "manifest.json").write_text(json.dumps({"dataset": "live", "split": "live", "scenarios": [{"scenario_id": i} for i in ids],
+                                                    "thresholds": LIVE_THRESHOLDS}, ensure_ascii=False, indent=1))
+    return len(ids)
+
+
 def main():
+    if "--manifest" in sys.argv:                       # rebuild data/live/manifest.json and exit
+        print(f"data/live: {write_live_manifest()} recordings listed")
+        return
     from websockets.asyncio.server import serve
     SCEN_GENDER.update(_gender())
     from turn.asr import warmup

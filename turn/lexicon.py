@@ -90,10 +90,65 @@ def _strip_speaker_label(text: str) -> tuple[str, bool]:
     return (text[m.end():], True) if m else (text, False)
 
 
+# ---------------------------------------------------------------- cleaning what speech recognition writes
+_LABEL_ANYWHERE = re.compile(r"(^|\s|-)[^\s:]{1,12}\s?:(?=\s*\S)")
+_DASH = re.compile(r"(^|\s)-+\s*")
+_CHAR_RUN = re.compile(r"(\S)\1{3,}")
+_PUNCT_RUN = re.compile(r"([!؟?.،,])\1+")
+HALLUCINATION_PHRASES = [norm(p) for p in ["شكرا على المشاهدة", "شكرا للمشاهدة", "ترجمة نانسي قنقر", "اشتركوا في القناة", "تصفيق", "موسيقى"]]
+GULF_MARKERS = {norm(w) for w in "وش ايش ابي ابغى ابغي يبي تبي زين الحين كذا عشان مو مب حق ترا ترى وايد شلون اللي ياخي يعطيك هلا ايه اي".split()}
+MSA_MARKERS = {norm(w) for w in "إنها إنه سأعود سوف لماذا هل أنت لقد ليس لست حيث الذي التي نحن هذه".split()}
+# one-word acknowledgements: never enough to stop the agent when the words are unclear
+ACK_TOKENS = BACKCHANNEL | FILLER | AMBIG | POLITE | {norm(w) for w in "انا كان ها اوكي شكرا نعم ايوه اه".split()}
+
+
+CLEAN_ASR = True
+
+
+def clean_asr(text: str) -> tuple[str, dict]:
+    """Remove what the recogniser invents (speaker labels, dialogue dashes, runaway repeats) and flag what it hallucinates."""
+    flags = {"labelled": False, "repeats": False, "hallucination": False, "fluent_msa": False}
+    t = text or ""
+    if not CLEAN_ASR:                                 # switched off: only the old leading-label strip
+        t, flags["labelled"] = _strip_speaker_label(t)
+        return t, flags
+    t, flags["labelled"] = _strip_speaker_label(t)      # a leading label first («أبو عابد :», «"مازن": …»)
+    if _LABEL_ANYWHERE.search(t):
+        flags["labelled"] = True
+        t = _LABEL_ANYWHERE.sub(lambda m: m.group(1) if m.group(1) != "-" else " ", t)
+    t = _DASH.sub(lambda m: m.group(1), t)
+    if _CHAR_RUN.search(t):
+        flags["repeats"] = True
+        t = _CHAR_RUN.sub(r"\1\1", t)
+    t = _PUNCT_RUN.sub(r"\1", t)
+    words = t.split()
+    kept: list[str] = []
+    for w in words:                                   # a token repeated more than 3 times in a row: keep 2
+        if len(kept) >= 3 and kept[-1] == kept[-2] == kept[-3] == w:
+            flags["repeats"] = True
+            continue
+        kept.append(w)
+    if len(kept) < len(words):
+        kept = [w for i, w in enumerate(kept) if not (i >= 2 and kept[i - 1] == kept[i - 2] == w)]
+    t = re.sub(r"\s+", " ", " ".join(kept)).strip()
+    n = norm(t)
+    if n and any(n == h or n.endswith(" " + h) for h in HALLUCINATION_PHRASES):
+        flags["hallucination"] = n in HALLUCINATION_PHRASES
+        if flags["hallucination"]:
+            t = ""
+    ws = n.split()
+    flags["fluent_msa"] = len(ws) >= 6 and not any(w in GULF_MARKERS for w in ws) and any(w in MSA_MARKERS for w in ws)
+    return t, flags
+
+
 def analyse(text: str, agent_text: str = "") -> dict:
     """Turn the caller's words into simple, explainable features."""
     # Cohere wraps a whole reading in brackets when it is guessing at an unclear sound («(تيم هوليوود)»): unreliable
     bracketed = bool(re.fullmatch(r"\s*[\(\[].*[\)\]]\s*[:.،]?\s*", text or ""))
+    raw_text = text or ""
+    text, clean_flags = clean_asr(raw_text)
+    if clean_flags["hallucination"] or (clean_flags["labelled"] and not norm(text)):
+        bracketed = True
     # ...and invents a speaker label when guessing: «"مازن الضراب": …», «أبو عابد :», «رغد:انا…», «زي:»
     text, labelled = _strip_speaker_label(text or "")
     bracketed = bracketed or (labelled and not norm(text))
@@ -140,10 +195,11 @@ def analyse(text: str, agent_text: str = "") -> dict:
     # weak negations alone («مش», «ما», «مو») are usually a mis-heard «مم / ماشي»: not a bid without more words
     if bid and len(words) == 1 and words[0] in WEAK_BID:
         bid, bc = 0, bc + 1
-    question = "؟" in text or "?" in text
+    question = "؟" in raw_text or "?" in raw_text
     return {"words": words, "n": len(words), "bc": bc, "filler": fill, "bid": bid, "content": content,
             "echoed": echoed, "ambig": amb, "repeated_ambig": repeated_amb, "question": question,
-            "first_bid": first_bid, "hallucination": halluc}
+            "first_bid": first_bid, "hallucination": halluc, "fluent_msa": clean_flags["fluent_msa"],
+            "single_ack": len(words) == 1 and words[0] in ACK_TOKENS}
 
 
 ARABIC_DIGITS = {norm(w): i for i, w in enumerate(

@@ -21,6 +21,8 @@ import numpy as np
 
 from turn.config import EXT_DIR
 
+from . import http_pool
+
 CACHE = EXT_DIR / "voice-cache"
 VOICES = {"f": "ar-SA-ZariyahNeural", "m": "ar-SA-HamedNeural"}
 FILLERS = ["طيب", "إيه نعم", "أبشر", "طيب، لحظة"]
@@ -119,8 +121,12 @@ def _eleven(text: str, gender: str) -> np.ndarray:
     body = json.dumps({"text": text, "model_id": ELEVEN_MODEL, "language_code": "ar"}).encode()
     headers = {"xi-api-key": os.environ["ELEVENLABS_API_KEY"], "Content-Type": "application/json"}
     url = f"{ELEVEN_URL}/text-to-speech/{_eleven_voice(gender)}?output_format=pcm_{RATE}"
-    with urllib.request.urlopen(urllib.request.Request(url, body, headers), timeout=15) as r:
-        return np.frombuffer(r.read(), dtype="<i2").copy()
+    return np.frombuffer(http_pool.post(url, body, headers, 15), dtype="<i2").copy()   # kept alive: no TLS per sentence
+
+
+def warm_connection(engine: str) -> bool:
+    """Open the TTS connection before the first reply. Never raises."""
+    return engine == "eleven" and eleven_ready() and http_pool.warm(ELEVEN_URL)
 
 
 def _live_line(text: str, gender: str) -> Path:

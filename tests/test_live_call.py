@@ -25,6 +25,16 @@ def test_the_agents_own_voice_cannot_stop_it():
     assert not call(words(2), echo_flags=[True] * 50)._real_words()
 
 
+def test_one_acknowledgement_word_does_not_stop_the_demo_agent():
+    for word in ("أيوه", "نعم", "شكراً", "طيب"):
+        conv = call(words(1))
+        conv.tt.cand["text"] = word
+        assert not conv._real_words(), word
+    conv = call(words(1))
+    conv.tt.cand["text"] = "وقف"
+    assert conv._real_words()
+
+
 def test_no_words_cannot_stop_the_agent():
     assert not call(words(0))._real_words()
 
