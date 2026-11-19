@@ -22,6 +22,7 @@ import hashlib
 import json
 import re
 import sys
+import zlib
 from pathlib import Path
 
 import numpy as np
@@ -44,6 +45,8 @@ EDGE = {("SA", "m"): "ar-SA-HamedNeural", ("SA", "f"): "ar-SA-ZariyahNeural", ("
         ("QA", "f"): "ar-QA-AmalNeural", ("OM", "m"): "ar-OM-AbdullahNeural", ("OM", "f"): "ar-OM-AyshaNeural"}
 ESC_FOR = {"cough": "coughing", "laugh": "laughing", "sneeze": "sneezing", "sigh": "breathing", "throat": "coughing",
            "horn": "car_horn", "engine": "engine", "dog": "dog", "baby": "crying_baby"}
+PAD = ("وإذا احتجت أي شي ثاني تقدر تتواصل معنا على نفس الرقم، وفريقنا موجود طول أيام الأسبوع من الصبح لين الليل "
+       "عشان يخدمك ويجاوب على كل استفساراتك.")
 S3_STOP_OFFSETS = [-300, -200, -100, 0, 100, 200, 300]
 S3_KEEP_OFFSETS = [-200, 0, 200]
 PAUSE = re.compile(r"\[pause\s*(\d+)\s*(required|optional)?\]")
@@ -459,8 +462,13 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
     bank = json.loads(Path(a.bank).read_text(encoding="utf-8"))[a.which]
     calls = [c for key in bank for c in bank[key]]
-    rng = np.random.default_rng(a.seed)
-    plans = [plan_items(c, rng) for c in calls]
+    keys, seen = [], {}
+    for c in calls:                                  # a stable id per call, so each call has its own random stream
+        k = c.get("probe") or c["category"]
+        seen[k] = seen.get(k, 0) + 1
+        keys.append(f"{a.which}/{k}/{seen[k]}")
+    rngs = [np.random.default_rng([a.seed, zlib.crc32(k.encode())]) for k in keys]
+    plans = [plan_items(c, r) for c, r in zip(calls, rngs)]
     items = [it for _, its in plans for it in its]
     print(f"{a.which}: {len(calls)} calls, {len(set(items))} edge utterances to fetch", flush=True)
     sc.tts_batch(items)
@@ -469,13 +477,23 @@ def main(argv=None) -> int:
     (out / "labels").mkdir(parents=True, exist_ok=True)
     tag = {"mirror": "M", "stress-dev": "d", "stress-test": "t"}.get(a.which, "X")
     scen, counts, problems = [], {}, []
-    for i, (c, (p, _)) in enumerate(zip(calls, plans)):
+    for i, (c, (p, _), rng) in enumerate(zip(calls, plans, rngs)):
         key = c.get("probe") or c["category"]
         counts[key] = counts.get(key, 0) + 1
         cat = "GI" if (c.get("probe") == "S4" and c["expected"] == "STOP") else c["category"]
         sid = f"{cat}-{c['probe'] + tag if c.get('probe') else tag}{counts[key]:02d}"
         try:
             stereo, label, notes = render(counts[key] - 1, c, p, rng, sid, a.which)
+            for _ in range(2):            # SCRIPTS §3 needs the agent to keep talking after the event: pad, re-render
+                if not any(n.startswith("constraint") for n in notes):
+                    break
+                c = {**c, "a1": [*c["a1"][:-1], c["a1"][-1].rstrip() + " " + PAD]}
+                r2 = np.random.default_rng([a.seed, zlib.crc32(keys[i].encode())])
+                p, its = plan_items(c, r2)
+                sc.tts_batch(its)
+                stereo, label, notes = render(counts[key] - 1, c, p, r2, sid, a.which)
+                notes.append("agent utterance padded with a neutral closing sentence")
+                label["provenance"]["notes"] = notes
         except Exception as e:  # noqa: BLE001
             problems.append(f"{sid}: {type(e).__name__} {e}")
             continue

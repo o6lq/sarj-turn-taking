@@ -177,10 +177,16 @@ def main(argv=None) -> int:
     bank = json.loads(out.read_text(encoding="utf-8")) if out.exists() else {}
     want = a.only.split(",")
     groups = {"mirror": [["GI", "BC", "HT", "BG"], ["NV", "AM", "OV", "DV"]],
-              "stress": [["S1", "S2", "S3", "S4"], ["S5", "S6", "S7"]]}
+              "stress": [["S1", "S2", "S3", "S4"], ["S5"], ["S6"], ["S7"]]}
 
     def save():
-        out.write_text(json.dumps(bank, ensure_ascii=False, indent=1), encoding="utf-8")
+        """Merge into what is on disk: another run may have written batches meanwhile; never drop them."""
+        disk = json.loads(out.read_text(encoding="utf-8")) if out.exists() else {}
+        for name, d in bank.items():
+            if isinstance(d, dict):
+                disk.setdefault(name, {}).update(d)
+        bank.update(disk)
+        out.write_text(json.dumps(disk, ensure_ascii=False, indent=1), encoding="utf-8")
 
     def run(bank_name, keys, avoid=None):
         if all(k in bank.get(bank_name, {}) for k in keys):

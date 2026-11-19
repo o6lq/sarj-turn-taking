@@ -7,6 +7,8 @@ its decision log (real time): the rule that fired, the word-layer features, timi
 Tags (a failure can carry several):
   W1 answer-as-echo   a STOP/EITHER event where a read had echoed words, no bid word and < 2 content words, and the
                       rules called it an acknowledgement (the caller's answer repeated the agent's words)
+  Q1 one-word-answer  the agent had asked a question (this or an earlier utterance) and the caller's answer read as one
+                      content word, no bid word: below CONTENT_MIN, so the rules call it an acknowledgement (F2/F6)
   W2 resume-over      a STOP inside the event, then RESUME before the caller finished (scored as a miss)
   W3 late-onset       the caller started < 300 ms after (or before) the agent's utterance start, and the first
                       candidate opened > 200 ms after the caller's onset, or never
@@ -71,6 +73,11 @@ def diagnose(score, labels, traces):
             if any(feat(x, "echoed", 0) >= 1 and feat(x, "bid", 0) == 0 and feat(x, "content", 0) < 2
                    and "acknowledgement" in str(x.get("why", "")) for x in rs):
                 tags.append("W1")
+            q_before = any(u["is_question"] or str(u["text"]).strip().endswith(("؟", "?"))
+                           for u in lb.get("agent_utterances", [])[1:] if u["start_ms"] <= onset + 400)
+            if q_before and any(feat(x, "content", 0) == 1 and feat(x, "bid", 0) == 0
+                                and "acknowledgement" in str(x.get("why", "")) for x in rs):
+                tags.append("Q1")
             if stops and resumes and any(r["t"] > stops[0]["t"] and r["t"] < offset for r in resumes):
                 tags.append("W2")
             ag = last_agent_start(lb, onset)
