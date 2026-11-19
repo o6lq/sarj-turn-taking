@@ -117,7 +117,7 @@ td.num{font-variant-numeric:tabular-nums;text-align:center}
       <div class="lay"><b>L4b المعنى: يبي الكلمة؟</b><div class="bar s"><i id="msem"></i></div><div class="val" id="vsem">—</div></div>
       <div class="lay"><b>L5 القرار</b><div class="bar s"><i id="mp"></i></div><div class="val" id="vp">—</div></div>
       <div style="margin-top:10px" class="small mut">L4 سمع:</div><div class="words" id="words"></div><div class="why" id="why"></div>
-      <div class="stat" style="margin-top:12px"><div>سكوت بعد المقاطعة<br><b id="sstop">—</b></div><div>أول كلمة بالرد<br><b id="sreply">—</b></div><div>رجع يكمّل<br><b id="sres">٠</b></div></div>
+      <div class="stat" style="margin-top:12px"><div>سكوت بعد المقاطعة<br><b id="sstop">—</b></div><div>أول كلمة بالرد<br><b id="sreply">—</b><br><small id="sparts" style="color:var(--muted)"></small></div><div>رجع يكمّل<br><b id="sres">٠</b></div></div>
       <div class="hint" id="cal">الوكيل يتعلّم صوتك من أول جواب («إيه نعم، هلا»).</div>
     </div>
   </div>
@@ -374,6 +374,10 @@ $('#go').onclick = async () => {
     }
     if (m.type === 'hearing' && m.why && m.why.startsWith('كان تأييد')) { st.res++; $('#sres').textContent = ar(st.res); }
     if (m.type === 'stat' && m.kind === 'reply') { st.replies.push(m.ms); $('#sreply').textContent = avg(st.replies) + ' ms'; }
+    if (m.type === 'stat' && m.kind === 'reply' && m.parts) {   // where the last reply's time went
+      const p = m.parts, f = (k, t) => p[k] != null ? `${t} ${p[k]}` : null;
+      $('#sparts').textContent = [f('total_ms', 'الكل'), f('eot_ms', 'سكوت'), f('asr_ms', 'قراءة'), f('brain_first_ms', 'العقل'), f('head_start_ms', 'بدأ مبكر')].filter(Boolean).join(' · ');
+    }
     if (m.type === 'meter') {
       W('#mvad', m.vad * 100); $('#vvad').textContent = m.vad.toFixed(2);
       W('#mdb', (m.db + 70) * 1.6); $('#vdb').textContent = m.db + ' dB';

@@ -14,7 +14,9 @@ from __future__ import annotations
 import asyncio
 import base64
 import io
+import os
 import random
+import threading
 import time
 import wave
 
@@ -36,6 +38,11 @@ INTERRUPT_SETTLE_MS = 600    # the caller has been quiet this long after interru
 STRAY_SOUND_MS = 200         # less voiced sound than this after a stop never completes a turn
 LIVE_CHUNK_BYTES = 9600      # 200 ms of 24 kHz audio: enough to ride out small network gaps
 LIVE_ERRORS = (OSError, KeyError, websockets.WebSocketException)
+SPECULATE_AT_MS = int(os.environ.get("TT_SPECULATE_MS", "300"))
+# Speculative reply: the turn-taker answers after 600 ms of silence (EOT_BASE_MS). From this much silence on, when the
+# caller's sentence is already read and complete, the brain starts writing the reply, but no audio plays until the
+# turn-taker really gives the turn. If the caller speaks again first, the draft is thrown away. The reply is written
+# from exactly the same text and history, so it is the same reply, just earlier. 0 switches it off.
 
 
 def wav_b64(x: np.ndarray) -> str:
@@ -87,6 +94,9 @@ class Conversation:
         self.phase = "greeting"                  # greeting → point → free conversation
         self.stop_ms = None
         self.planned_done = True
+        self.spec = None                         # a reply being written before the turn is given (see SPECULATE_AT_MS)
+        self.hold = None                         # set when that reply may be heard
+        self.parts = {}                          # where the time to the first reply audio went
 
     # ------------------------------------------------------------------ speaking
     def synth(self, text: str, engine: str | None = None) -> asyncio.Task:
@@ -94,14 +104,26 @@ class Conversation:
 
     async def say_chunk(self, text: str, filler: bool = False, audio: asyncio.Task | None = None):
         x, used = await (audio or self.synth(text))
-        if self.state not in ("speaking", "thinking"):
+        if not await self._may_speak():
             return
         cid = await self._open_chunk(text, round(len(x) * 16000 / voice.RATE), filler)
         await self.send({"type": "say", "id": cid, "wav": wav_b64(x), "text": text, "voice": used})
 
     async def _play_pcm(self, pcm: bytes, text: str):
+        if not await self._may_speak():
+            return
         cid = await self._open_chunk(text, round(len(pcm) / 2 * 16000 / voice.RATE), False)
         await self.send({"type": "pcm", "id": cid, "pcm": base64.b64encode(pcm).decode(), "text": text, "voice": "live"})
+
+    def _alive(self) -> bool:
+        """The current reply is still wanted: the agent is talking or about to, or it is a draft not yet thrown away."""
+        return self.state in ("speaking", "thinking") or (self.hold is not None and not self.hold.is_set())
+
+    async def _may_speak(self) -> bool:
+        """A draft reply waits here until the turn is really ours; then it plays at once."""
+        if self.hold is not None and not self.hold.is_set():
+            await self.hold.wait()
+        return self.state in ("speaking", "thinking")
 
     async def _open_chunk(self, text: str, n: int, filler: bool) -> int:
         """Register audio that is about to play. `n` counts samples at 16 kHz, as the browser reports them."""
@@ -114,9 +136,12 @@ class Conversation:
             self.turn_text = text
             self.tt.on_agent_start(text)
             if self.t_eot is not None:
-                self.stats.append({"kind": "reply", "ms": round((time.time() - self.t_eot) * 1000)})
-                await self.send({"type": "stat", "kind": "reply", "ms": self.stats[-1]["ms"]})
+                ms = round((time.time() - self.t_eot) * 1000)
+                parts = {**self.parts, "after_turn_ms": ms, "total_ms": ms + self.parts.get("eot_ms", 0)}
+                self.stats.append({"kind": "reply", "ms": ms, "parts": parts})
+                await self.send({"type": "stat", "kind": "reply", "ms": ms, "parts": parts})
                 self.t_eot = None
+                self.parts = {}
             await self.send({"type": "status", "state": "speaking"})
         else:
             self.turn_text += " " + text
@@ -148,7 +173,7 @@ class Conversation:
             if self.live is None or self.live.closed:
                 await self._connect_live()
             async for pcm, piece in self.live.speak(text):
-                if self.state not in ("speaking", "thinking"):
+                if not self._alive():
                     return True
                 buffered += pcm
                 words += piece
@@ -156,7 +181,7 @@ class Conversation:
                 if len(buffered) >= LIVE_CHUNK_BYTES:
                     await self._play_pcm(bytes(buffered), words)
                     buffered, words, started = bytearray(), "", True
-            if buffered and self.state in ("speaking", "thinking"):
+            if buffered and self._alive():
                 await self._play_pcm(bytes(buffered), words)
                 started = True
         except LIVE_ERRORS as e:
@@ -191,27 +216,33 @@ class Conversation:
         self.planned_done = True
         await self.on_idle(check=True)
 
-    async def reply(self, user_text: str, interrupted: bool):
-        """Brain → voice, pipelined: sentence 1 is spoken while sentence 2 is being written."""
-        self.state = "thinking"
+    async def reply(self, user_text: str, interrupted: bool, held: bool = False):
+        """Brain → voice, pipelined: sentence 1 is spoken while sentence 2 is being written.
+        held=True: a draft written before the turn is given; nothing plays and the history is not touched until
+        caller_finished() accepts it (self.hold)."""
         self.planned_done = False
-        await self.send({"type": "status", "state": "thinking"})
+        if not held:
+            self.state = "thinking"
+            await self.send({"type": "status", "state": "thinking"})
         note = ""
         if interrupted and self.remaining:
             note = (f"(ملاحظة لك: العميل قاطعك قبل ما تقول: «{self.remaining}». رد على كلامه أول، "
                     f"وبعدين ارجع للنقطة إذا لسا مهمة.) ")
         msgs = list(self.history) + [{"role": "user", "content": note + user_text}]
-        if not user_text.startswith("("):
+        if not user_text.startswith("(") and not held:
             self.history.append({"role": "user", "content": user_text})
         if self.engine == "live" and await self._stream_live(note + user_text):
             await self._finish_reply()
             return
         q: asyncio.Queue = asyncio.Queue()
         loop = asyncio.get_running_loop()
+        quit_ = threading.Event()                           # the reply was dropped: stop reading the brain
 
         def produce():
             try:
                 for s in brain.sentences(msgs):
+                    if quit_.is_set():
+                        break
                     loop.call_soon_threadsafe(q.put_nowait, s)
             except Exception as e:  # brain down → say so, do not hang
                 loop.call_soon_threadsafe(q.put_nowait, f"__ERR__{e}")
@@ -223,13 +254,28 @@ class Conversation:
         async def flush(block: bool):
             while pending and (block or pending[0][1].done()):
                 s, t = pending.pop(0)
-                if self.state not in ("speaking", "thinking"):
+                if not self._alive():
                     return
                 await self.say_chunk(s, audio=t)
+        try:
+            await self._write_and_speak(q, held, t0, said, pending, flush, filler_done)
+        finally:
+            quit_.set()
+        await fut
+        if any("مع السلامة" in s for s in said):
+            self.ending = True
+        await self._finish_reply()
+
+    async def _write_and_speak(self, q, held, t0, said, pending, flush, filler_done):
         while True:
+            waiting = held and self.hold is not None and not self.hold.is_set()
+            start = (self.t_eot or t0) if held else t0      # a draft's filler clock starts when the turn is given
             try:
-                s = await asyncio.wait_for(q.get(), timeout=max(0.05, FILLER_AFTER_S - (time.time() - t0)) if not filler_done else 30)
+                s = await asyncio.wait_for(q.get(), timeout=0.05 if waiting else
+                                           (max(0.05, FILLER_AFTER_S - (time.time() - start)) if not filler_done else 30))
             except asyncio.TimeoutError:
+                if waiting:
+                    continue
                 if not filler_done:
                     filler_done = True
                     filler = random.choice(voice.FILLERS[:3])
@@ -241,17 +287,15 @@ class Conversation:
             if s.startswith("__ERR__"):
                 await self.send({"type": "error", "text": "العقل (النموذج اللغوي) ما رد: " + s[7:]})
                 break
-            if self.state not in ("speaking", "thinking"):
+            if not self._alive():
                 break                                      # interrupted while still writing: drop the rest
             if filler_done and said == [] and s.startswith(("طيب", "إيه نعم", "أبشر")) and len(s) < 12:
                 continue
+            if not said:
+                self.parts.setdefault("brain_first_ms", round((time.time() - t0) * 1000))
             said.append(s)
             pending.append((s, self.synth(s, self.reply_engine)))
             await flush(len(said) == 1)                     # the first sentence goes out as soon as it is ready
-        await fut
-        if any("مع السلامة" in s for s in said):
-            self.ending = True
-        await self._finish_reply()
 
     async def _finish_reply(self):
         self.planned_done = True
@@ -358,6 +402,7 @@ class Conversation:
         caller = self.echo_gate(agent, caller)
         d = self.tt.on_frame(agent, caller)
         dec = (d["decision"] if isinstance(d, dict) else d) if d else None
+        self._check_spec()
         while self.seen_trace < len(self.tt.trace):          # show the caller's acknowledgements as they happen
             r = self.tt.trace[self.seen_trace]
             self.seen_trace += 1
@@ -404,6 +449,45 @@ class Conversation:
                 and self.ms - self.listen_since > SILENCE_NUDGE_MS and len(self.history) > 1:
             self.listen_since = self.ms
             self.task = asyncio.create_task(self.reply("(العميل ساكت ما رد. تأكد بلطف إنه معك)", False))
+        else:
+            self._maybe_speculate()
+
+    # ------------------------------------------------------------------ speculative reply (SPECULATE_AT_MS)
+    def _maybe_speculate(self):
+        """The caller paused after a complete sentence: start writing the answer, but keep it silent."""
+        if not SPECULATE_AT_MS or self.spec is not None or self.state != "listening" or self.phase == "greeting" \
+                or self.interrupted_at is not None or (self.task is not None and not self.task.done()):
+            return
+        t = self.tt.turn
+        if not t or t.get("done") or t["voiced"] < STRAY_SOUND_MS or self.ms - t["last"] < SPECULATE_AT_MS \
+                or not t.get("text") or t.get("text_at", -1) < t["last"]:
+            return                                        # still talking, or this pause has not been read yet
+        text, _, ok = self._judge(t["text"], False)
+        need = lexicon.expected_digits(self.tt.agent_text or "")
+        if not ok or lexicon.is_incomplete(text) or (need is not None and lexicon.count_digits(text) < need):
+            return                                        # the turn-taker will wait longer here: no draft
+        self.hold = asyncio.Event()
+        self.parts = {}
+        self.spec = {"text": text, "id": t["id"], "last": t["last"], "t0": time.time()}
+        self.spec["task"] = asyncio.create_task(self.reply(text, False, held=True))
+
+    def _check_spec(self):
+        """Throw the draft away as soon as it no longer matches the caller's turn (they carried on talking)."""
+        s, t = self.spec, self.tt.turn
+        if s is not None and (self.state != "listening" or t is None or t["id"] != s["id"] or t["last"] != s["last"]):
+            self.spec = None
+            self._drop_spec(s)
+
+    def _drop_spec(self, s: dict | None):
+        if s is None:
+            return
+        self.hold = None
+        s["task"].cancel()
+        if self.engine == "live":
+            # the live session already heard half a turn: start a clean session from the history in the background,
+            # so the next reply is written from exactly what the caller said and nothing else
+            self.shutdown()
+            asyncio.create_task(self._connect_quietly())
 
     def _interruption_over(self) -> bool:
         """The caller interrupted briefly and went quiet. A stray sound after the stop must not keep the agent waiting."""
@@ -437,36 +521,58 @@ class Conversation:
             return False                                 # one «أيوه/نعم/طيب», or formal Arabic nobody said: keep talking
         return True
 
+    def _judge(self, text: str, interrupted: bool) -> tuple[str, dict, bool]:
+        """Clean the caller's words and decide whether they are real words for the agent (not noise or its own voice)."""
+        text = lexicon.clean_asr(text)[0].strip()
+        last_agent = next((m["content"] for m in reversed(self.history) if m["role"] == "assistant"), "")
+        a = lexicon.analyse(text, last_agent + " " + self.turn_text)
+        own_voice = a["echoed"] / max(1, a["n"]) >= 0.6 and (not interrupted or a["n"] >= 5)   # a short question may reuse the agent's words
+        return text, a, bool(text) and not a["hallucination"] and bool(a["words"]) and not own_voice
+
     async def caller_finished(self, start_ms: float):
+        spec, self.spec = self.spec, None
+        adopted = False
+        try:
+            adopted = await self._caller_finished(start_ms, spec)
+        finally:
+            if not adopted:
+                self._drop_spec(spec)
+
+    async def _caller_finished(self, start_ms: float, spec: dict | None) -> bool:
+        """Returns True when the draft reply `spec` was used."""
         audio = self.tt._audio_since(max(start_ms - 150, self.ms - 29000))
         interrupted = self.interrupted_at is not None
         self.interrupted_at = None
         self.t_eot = self.t_answer = time.time()
         turn = self.tt.turn
+        drafted = self.parts.get("brain_first_ms") if spec is not None else None
+        self.parts = {"eot_ms": self.ms - turn["last"]} if turn else {}
+        if drafted is not None:
+            self.parts["brain_first_ms"] = drafted          # measured from the start of the draft
         if not interrupted and turn and turn.get("text") and turn.get("text_at", -1) >= turn["last"]:
             text = turn["text"]                                 # the turn-taker already read the whole turn
         else:
+            t_asr = time.time()
             text = (await asyncio.to_thread(transcribe, audio, False)).get("text", "")
-        text = lexicon.clean_asr(text)[0].strip()
-        last_agent = next((m["content"] for m in reversed(self.history) if m["role"] == "assistant"), "")
-        a = lexicon.analyse(text, last_agent + " " + self.turn_text)
-        own_voice = a["echoed"] / max(1, a["n"]) >= 0.6 and (not interrupted or a["n"] >= 5)   # a short question may reuse the agent's words
-        if not text or a["hallucination"] or not a["words"] or own_voice:
+            self.parts["asr_ms"] = round((time.time() - t_asr) * 1000)
+        text, a, ok = self._judge(text, interrupted)
+        if not ok:
             self.tt.turn = None
             if interrupted:                                   # the agent stopped for the caller: never leave them in silence
                 self.task = asyncio.create_task(self.reply("(قاطعك العميل بس ما سمعت كلامه بوضوح. اعتذر باختصار واطلب منه يعيد)", False))
-            return                                            # noise, not words: keep listening
+            return False                                      # noise, not words: keep listening
         only_ack = a["bid"] == 0 and a["content"] == 0 and not a["repeated_ambig"] and not a["question"]
         if interrupted and only_ack and self.remaining:
             self.score.was_acknowledgement(text)
             await self.send_score()
             await self.send({"type": "chat", "role": "caller", "text": text, "note": "تأييد — يكمّل"})
             await self._resume()
-            return
+            return False
         if interrupted:
             self.score.heard(text)
             await self.send_score()
         await self.send({"type": "chat", "role": "caller", "text": text, "note": "قاطع" if interrupted else ""})
+        turn_last = turn["last"] if turn else None
         self.tt.turn = None
         if self.task and not self.task.done():
             self.task.cancel()
@@ -476,8 +582,19 @@ class Conversation:
             self.state = "thinking"
             self.planned_done = False
             self.task = asyncio.create_task(self._first_point())
-            return
+            return False
+        if (spec is not None and not interrupted and spec["text"] == text and spec["last"] == turn_last
+                and not spec["task"].done() and self.hold is not None):
+            # the draft was written from this exact turn: let it play now
+            self.history.append({"role": "user", "content": text})
+            self.state = "thinking"
+            await self.send({"type": "status", "state": "thinking"})
+            self.parts["head_start_ms"] = round((self.t_eot - spec["t0"]) * 1000)
+            self.task = spec["task"]
+            self.hold.set()
+            return True
         self.task = asyncio.create_task(self.reply(text, interrupted))
+        return False
 
     async def _first_point(self):
         if self.engine == "live":
@@ -500,6 +617,9 @@ class Conversation:
     async def start(self):
         self.state = "thinking"
         self.planned_done = False
+        # open the brain and voice connections now (TCP + TLS) so the first reply does not wait for a handshake
+        asyncio.create_task(asyncio.to_thread(brain.warm_connection))
+        asyncio.create_task(asyncio.to_thread(voice.warm_connection, self.reply_engine))
         if self.engine == "live":
             asyncio.create_task(self._connect_quietly())
         await self.speak_lines(self.sc["opening"])

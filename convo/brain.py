@@ -22,10 +22,11 @@ import socket
 import subprocess
 import sys
 import time
-import urllib.request
 from pathlib import Path
 
 from turn.config import EXT_DIR
+
+from . import http_pool
 
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
 GEMINI_MODEL = "gemini-3.5-flash-lite"
@@ -127,6 +128,14 @@ def warm():
         pass
 
 
+def warm_connection() -> bool:
+    """Open the network connection to the brain now (TCP + TLS), so the first reply of the call does not pay for
+    it. Never raises; returns False when there is nothing to warm or the network is down."""
+    if globals().get("_current") in CLAUDE:
+        return False
+    return http_pool.warm(_endpoint()[0])
+
+
 def normalize(messages: list[dict]) -> list[dict]:
     """Strict chat templates (Gemma) need: one system message first, then user/assistant alternating, user first."""
     sys_txt = "\n".join(m["content"] for m in messages if m["role"] == "system")
@@ -180,30 +189,30 @@ def stream(messages: list[dict], max_tokens: int = 120, temperature: float = 0.6
         payload["model"] = os.environ.get("TT_BRAIN_MODEL", "local-model")
     elif current == "gemini":
         payload["model"] = os.environ.get("GEMINI_MODEL", GEMINI_MODEL)
+        if os.environ.get("GEMINI_REASONING_EFFORT"):         # optional: e.g. "low"/"none" if the model allows it
+            payload["reasoning_effort"] = os.environ["GEMINI_REASONING_EFFORT"]
     url, headers, timeout = _endpoint()
-    req = urllib.request.Request(url, json.dumps(payload).encode(), headers)
     in_think = started = False
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            for raw in r:
-                line = raw.decode("utf-8", "ignore").strip()
-                if not line.startswith("data:") or line == "data: [DONE]":
+        for raw in http_pool.post_lines(url, json.dumps(payload).encode(), headers, timeout):   # kept alive: no new TLS handshake per reply
+            line = raw.decode("utf-8", "ignore").strip()
+            if not line.startswith("data:") or line == "data: [DONE]":
+                continue
+            try:
+                d = json.loads(line[5:])["choices"][0].get("delta", {}).get("content") or ""
+            except (ValueError, KeyError, IndexError):
+                continue
+            if "<think>" in d:
+                in_think = True
+            if in_think:
+                if "</think>" in d:
+                    in_think = False
+                    d = d.split("</think>", 1)[1]
+                else:
                     continue
-                try:
-                    d = json.loads(line[5:])["choices"][0].get("delta", {}).get("content") or ""
-                except (ValueError, KeyError, IndexError):
-                    continue
-                if "<think>" in d:
-                    in_think = True
-                if in_think:
-                    if "</think>" in d:
-                        in_think = False
-                        d = d.split("</think>", 1)[1]
-                    else:
-                        continue
-                if d:
-                    started = True
-                    yield d
+            if d:
+                started = True
+                yield d
     except (OSError, http.client.HTTPException) as e:
         if current != "gemini" or started or not _claude_ready():   # half a sentence was already spoken: do not restart it
             raise
@@ -212,17 +221,21 @@ def stream(messages: list[dict], max_tokens: int = 120, temperature: float = 0.6
 
 
 _SENT = re.compile(r"(.+?[\.\!\؟\?…]+|.{70,}?[،,])(\s+|$)", re.S)     # split at commas only in long sentences
+_FIRST = re.compile(r"(.{%d,}?[،,])(\s+|$)" % int(os.environ.get("TT_FIRST_CLAUSE_CHARS", "24")), re.S)
+# The first piece of a reply may end at a comma once it has a few words: the voice starts on that clause while the
+# rest of the sentence is still being written. A comma is where a speaker pauses anyway, so it does not sound cut.
 
 
 def sentences(messages: list[dict]):
     """Yield complete, speakable sentences as soon as each one is finished."""
-    buf = ""
+    buf, first = "", True
     for piece in stream(messages):
         buf += piece
         while True:
-            m = _SENT.match(buf)
+            m = _SENT.match(buf) or (_FIRST.match(buf) if first else None)
             if not m:
                 break
+            first = False
             s = clean(m.group(1))
             buf = buf[m.end():]
             if s:
