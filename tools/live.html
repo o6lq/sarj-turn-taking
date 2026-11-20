@@ -178,16 +178,17 @@ fetch('/calls').then(r => r.json()).then(cs => {
 // ------------------------------------------------ audio worklet: plays the agent, records the mic, resamples both to 16 kHz in lockstep
 const worklet = `
 class P extends AudioWorkletProcessor {
-  constructor(){ super(); this.q = []; this.cur = null; this.pos = 0; this.gain = 1; this.fading = false;
+  constructor(){ super(); this.q = []; this.cur = null; this.pos = 0; this.gain = 1; this.fading = false; this.muted = false;
     this.ratio = sampleRate / 16000; this.bA = []; this.bM = []; this.p = 0; this.fa = []; this.fc = [];
     this.port.onmessage = e => { const d = e.data;
-      if (d.agent) { this.q = [{id: -1, buf: d.agent}]; this.cur = null; this.fading = false; }
-      if (d.enqueue) this.q.push({id: d.id, buf: d.enqueue});
-      if (d.stop) this.fading = true; }; }
+      if (d.agent) { this.q = [{id: -1, buf: d.agent}]; this.cur = null; this.fading = false; this.muted = false; }
+      if (d.start !== undefined) this.muted = false;
+      if (d.enqueue && !this.muted) this.q.push({id: d.id, buf: d.enqueue});
+      if (d.stop) { this.q = []; this.muted = true; if (this.cur) this.fading = true; } }; }
   process(inputs, outputs){
     const mic = inputs[0] && inputs[0][0] ? inputs[0][0] : null; const out = outputs[0][0];
     for (let i = 0; i < out.length; i++) {
-      if (!this.cur && this.q.length && !this.fading) { this.cur = this.q.shift(); this.pos = 0; this.gain = 1; this.port.postMessage({started: this.cur.id}); }
+      if (!this.cur && this.q.length && !this.fading && !this.muted) { this.cur = this.q.shift(); this.pos = 0; this.gain = 1; this.port.postMessage({started: this.cur.id}); }
       let a = 0;
       if (this.cur) {
         a = this.cur.buf[this.pos++] * this.gain;
@@ -195,7 +196,7 @@ class P extends AudioWorkletProcessor {
           if (this.gain === 0) { this.port.postMessage({stopped: {id: this.cur.id, played: Math.round(this.pos / this.ratio)}}); this.cur = null; this.q = []; this.fading = false; } }
         if (this.cur && this.pos >= this.cur.buf.length) { const id = this.cur.id; this.cur = null;
           this.port.postMessage({chunkEnded: id}); if (id === -1) this.port.postMessage({ended: true}); if (!this.q.length) this.port.postMessage({idle: true}); }
-      } else if (this.fading) this.fading = false;
+      }
       out[i] = a; this.bA.push(a); this.bM.push(mic ? mic[i] : 0);
     }
     const r = this.ratio, w = Math.max(1, Math.round(r));
@@ -348,7 +349,7 @@ $('#go').onclick = start;
 $('#end').onclick = () => { if (node) node.port.postMessage({stop: true}); finish(); };
 
 // ------------------------------------------------ full conversation
-const cv = {on: false, bubble: null, stops: [], replies: []};
+const cv = {on: false, bubble: null, stops: [], replies: [], stopEpoch: -1, playEpoch: null};
 fetch('/scenarios').then(r => r.json()).then(d => {
   for (const [k, v] of Object.entries(d.scenarios)) { const o = document.createElement('option'); o.value = k; o.textContent = v; $('#scen').append(o); }
   const names = {'gemini': 'Gemini (سحابي، الافتراضي)', 'local-url': 'API أو LM Studio', 'gemma4-26b': 'Gemma 4 26B (محلي، الأفضل: ١٢/١٢ بـ٠٫٦ ث)', 'gemma4-e4b': 'Gemma 4 E4B (محلي، خفيف)', 'gemma-12b': 'Gemma 3 12B (محلي)', 'qwen3-14b': 'Qwen3 14B (محلي)', 'claude-opus': 'Claude Opus 5.5 (سحابي، الأذكى، أبطأ)', 'claude-haiku': 'Claude Haiku 5.5 (سحابي، أسرع)'};
@@ -373,7 +374,7 @@ $('#cgo').onclick = async () => {
   $('#chat').innerHTML = ''; cv.bubble = null; cv.stops = []; cv.replies = []; $('#cstop').textContent = '—'; $('#creply').textContent = '—';
   cv.on = true; $('#cgo').disabled = true;
   if (ws) { try { ws.onmessage = null; ws.close(); } catch (er) {} }   // never keep two calls alive
-  node.port.postMessage({stop: true});
+  node.port.postMessage({stop: true}); cv.stopEpoch = -1; cv.playEpoch = null;   // a new call: epochs restart at 0
   ws = new WebSocket('ws://127.0.0.1:8771');
   ws.onopen = () => ws.send(JSON.stringify({type: 'convo_start', scenario: $('#scen').value, engine: $('#eng').value, model: $('#model').value}));
   ws.onmessage = async e => {
@@ -387,13 +388,17 @@ $('#cgo').onclick = async () => {
       if (m.state === 'ended') { cstate('✅ انتهت المكالمة'); $('#cgo').disabled = false; cv.on = false; }
     }
     if (m.type === 'say') {
+      if ((m.epoch ?? 0) < cv.stopEpoch) return;
       const bytes = Uint8Array.from(atob(m.wav), c => c.charCodeAt(0));
       const buf = await ctx.decodeAudioData(bytes.buffer);
+      if ((m.epoch ?? 0) < cv.stopEpoch) return;                 // a stop came while it was decoding
+      if ((m.epoch ?? 0) !== cv.playEpoch) { node.port.postMessage({start: m.epoch ?? 0}); cv.playEpoch = m.epoch ?? 0; }
       node.port.postMessage({enqueue: buf.getChannelData(0).slice(), id: m.id});
       if (!cv.bubble) cv.bubble = bubble('agent', m.text, m.voice === 'say' ? 'صوت بدون نت' : '');
       else cv.bubble.firstChild.textContent += ' ' + m.text;
     }
     if (m.type === 'stop') {
+      cv.stopEpoch = m.epoch ?? cv.stopEpoch; cv.playEpoch = null;
       node.port.postMessage({stop: true});
       cstate(`✋ سكت عشان يسمعك (بعد ${m.latency} ms)`);
       if (cv.bubble) { cv.bubble.classList.add('cut'); cv.bubble.insertAdjacentHTML('beforeend', '<span class="tag">✋ قاطعته هنا</span>'); }
@@ -403,6 +408,7 @@ $('#cgo').onclick = async () => {
       if (m.note === 'تأييد — كمّل') bubble('bc', m.text, 'سمعك وكمّل كلامه', '');
       else bubble('caller', m.text, m.note === 'قاطع' ? 'قاطعته' : '');
     }
+    if (m.type === 'stop_vetoed') cstate('ما وقفت: ' + (m.why || 'صدى/ضجيج'));
     if (m.type === 'hearing') $('#chear').textContent = m.text ? `يسمع: «${m.text}» — ${m.why}` : '';
     if (m.type === 'meter') $('#cmlvl').style.width = Math.max(0, Math.min(100, (m.db + 70) * 1.6)) + '%';
     if (m.type === 'stat' && m.kind === 'answer') { cv.ans = (cv.ans || []).concat(m.ms); $('#cans').textContent = Math.round(cv.ans.reduce((a, b) => a + b) / cv.ans.length) + ' ms'; }
