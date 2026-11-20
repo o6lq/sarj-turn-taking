@@ -250,6 +250,38 @@ button:focus-visible{outline:2px solid #fff;outline-offset:3px}
 .timing b{color:#fff;font-weight:600}
 .end.is-start{background:#2f9e62;box-shadow:0 10px 30px -10px rgba(47,158,98,.6)}
 .end.is-start:hover{background:#278a55}
+
+/* ===================== لوحة المحادثة والأرقام (يسار) ===================== */
+.log{position:absolute;left:clamp(16px,3vw,40px);top:50%;transform:translateY(-50%);z-index:4;width:min(380px,30vw);
+  max-height:min(620px,74vh);display:flex;flex-direction:column;gap:12px;
+  background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);border-radius:20px;padding:14px}
+.log h3{margin:0;font-size:14px;font-weight:600;color:var(--text-2);display:flex;justify-content:space-between;align-items:center}
+.log h3 small{font-weight:400;color:#a9a4d6;font-size:12px}
+.nums{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+.num{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:8px 6px;text-align:center}
+.num b{display:block;font-size:18px;font-weight:600;color:#fff;font-variant-numeric:tabular-nums;line-height:1.3}
+.num span{font-size:11px;color:#b9b4de}
+.parts{display:flex;flex-direction:column;gap:4px;font-size:12px;color:#c9c5e8}
+.part{display:grid;grid-template-columns:92px 1fr 48px;align-items:center;gap:6px}
+.part i{display:block;height:6px;border-radius:3px;background:var(--agent)}
+.part em{font-style:normal;text-align:left;font-variant-numeric:tabular-nums;color:#fff}
+.tx{flex:1;min-height:120px;overflow-y:auto;display:flex;flex-direction:column;gap:6px;padding-inline-end:4px}
+.line{flex:none;display:block;width:fit-content;font-size:14px;line-height:1.6;padding:7px 10px;border-radius:12px;max-width:94%}
+.line .t{overflow-wrap:anywhere}
+.line.l-agent{align-self:flex-start;background:rgba(79,159,224,.16);border:1px solid rgba(79,159,224,.3)}
+.line.l-caller{align-self:flex-end;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12)}
+.line.live{opacity:.7;font-style:italic}
+.line .who{display:block;font-size:11px;color:#a9a4d6;margin-bottom:2px}
+.line .tag{display:inline-block;margin-inline-start:6px;font-size:11px;padding:1px 8px;border-radius:999px;background:rgba(224,103,92,.25);color:#ffd0cb}
+.line .tag.keep{background:rgba(95,180,135,.22);color:#c9f2dc}
+.line.cut{border-color:rgba(224,103,92,.55)}
+.tx:empty::before{content:'هنا يطلع كلامك وكلام الوكيل أول بأول';font-size:13px;color:#8f89c4}
+@media (max-width:1100px){
+  body{overflow:auto}
+  .call{height:auto;min-height:100%}
+  .log{position:relative;left:auto;top:auto;transform:none;width:100%;max-height:none;margin-top:16px}
+  .tx{max-height:40vh}
+}
 </style>
 </head>
 <body>
@@ -284,6 +316,21 @@ button:focus-visible{outline:2px solid #fff;outline-offset:3px}
     <div class="sheet__row"><button type="button" class="btn btn--ok" id="saveBtn">حفظ</button><button type="button" class="btn btn--ghost" id="closeBtn">إغلاق</button></div>
   </aside>
 
+  <aside class="log" aria-label="المحادثة والأرقام">
+    <h3>الأرقام <small id="lastStop"></small></h3>
+    <div class="nums">
+      <div class="num"><b id="nStopAvg">—</b><span>متوسط السكوت ms</span></div>
+      <div class="num"><b id="nStops">٠</b><span>مرات سكت</span></div>
+      <div class="num"><b id="nReplyAvg">—</b><span>متوسط الرد ms</span></div>
+      <div class="num"><b id="nKept">٠</b><span>تأييد كمّل فوقه</span></div>
+      <div class="num"><b id="nRes">٠</b><span>سكت ورجع</span></div>
+      <div class="num"><b id="nVeto">٠</b><span>ما وقف (صدى)</span></div>
+    </div>
+    <div class="parts" id="parts"></div>
+    <h3>المحادثة <small id="txCount"></small></h3>
+    <div class="tx" id="tx" aria-live="polite"></div>
+  </aside>
+
   <section class="center">
     <div class="greeting">
       <h1 id="hello">أهلاً بك، أنا أسمعك</h1>
@@ -315,8 +362,6 @@ button:focus-visible{outline:2px solid #fff;outline-offset:3px}
         <span id="statusText">جاهز</span>
       </div>
       <div class="why" id="why"></div>
-      <div class="heard" id="heard"></div>
-      <div class="timing" id="timing"></div>
     </div>
   </section>
 
@@ -588,7 +633,7 @@ $('#speakerBtn').setAttribute('aria-pressed', String(settings.mic === 'spk'));
 ui.on('speaker', on => { settings.mic = on ? 'spk' : 'auto'; saveSettings(settings); $('#mic').value = settings.mic; });
 
 // ---- القرار والتوقيت (نفس الأرقام اللي كنا نجربها بالعرض) ----
-const st = {stops: [], replies: [], kept: 0, resumes: 0, parts: null};
+const st = {stops: [], replies: [], kept: 0, resumes: 0, vetoes: 0, parts: null};
 const avg = a => a.length ? Math.round(a.reduce((x, y) => x + y, 0) / a.length) : null;
 // a decision (stop / kept / vetoed, with its time) stays in the pill for a few seconds; the design's own text comes back after
 let decision = {html: '', kind: '', until: 0};
@@ -606,13 +651,41 @@ function decide(kind, text, why) {
   ui.render();
 }
 function renderTiming() {
-  const p = st.parts || {}, f = (v, t) => v != null ? `<span>${t} <b>${arNum(v)}</b> ms</span>` : '';
-  $('#timing').innerHTML = [
-    st.stops.length ? `<span>متوسط السكوت <b>${arNum(avg(st.stops))}</b> ms (${arNum(st.stops.length)})</span>` : '',
-    st.replies.length ? `<span>متوسط الرد <b>${arNum(avg(st.replies))}</b> ms</span>` : '',
-    f(p.total_ms, 'آخر رد: الكل'), f(p.eot_ms, 'انتظار نهاية الكلام'), f(p.asr_ms, 'قراءة الكلام'), f(p.brain_first_ms, 'العقل'), f(p.head_start_ms, 'بدأ مبكر'),
-    st.kept ? `<span>تأييد كمّل فوقه <b>${arNum(st.kept)}</b></span>` : '', st.resumes ? `<span>سكت ورجع <b>${arNum(st.resumes)}</b></span>` : ''
-  ].join('');
+  const a = avg(st.stops), r = avg(st.replies);
+  $('#nStopAvg').textContent = a == null ? '—' : arNum(a); $('#nStops').textContent = arNum(st.stops.length);
+  $('#nReplyAvg').textContent = r == null ? '—' : arNum(r); $('#nKept').textContent = arNum(st.kept);
+  $('#nRes').textContent = arNum(st.resumes); $('#nVeto').textContent = arNum(st.vetoes || 0);
+  $('#lastStop').textContent = st.stops.length ? `آخر سكوت ${arNum(st.stops[st.stops.length - 1])} ms` : '';
+  const p = st.parts || {}, rows = [['total_ms', 'آخر رد (الكل)'], ['eot_ms', 'انتظار نهاية الكلام'], ['asr_ms', 'قراءة الكلام'],
+                                    ['brain_first_ms', 'العقل (أول جملة)'], ['head_start_ms', 'بدأ مبكر']];
+  const max = Math.max(1, ...rows.map(([k]) => p[k] || 0));
+  $('#parts').innerHTML = rows.filter(([k]) => p[k] != null).map(([k, t]) =>
+    `<div class="part"><span>${t}</span><i style="width:${Math.max(4, Math.round(100 * p[k] / max))}%"></i><em>${arNum(p[k])}</em></div>`).join('');
+}
+// ---- المحادثة أول بأول ----
+let txAgent = null, txLive = null;
+function txLine(role, text, extra = '') {
+  const el = document.createElement('div'); el.className = 'line ' + (role === 'agent' ? 'l-agent' : 'l-caller');   // not .agent: that is the character
+  el.innerHTML = `<span class="who">${role === 'agent' ? 'الوكيل' : 'أنت'}</span><span class="t">${esc(text)}</span>${extra}`;
+  const box = $('#tx'); box.appendChild(el); box.scrollTop = box.scrollHeight;
+  $('#txCount').textContent = arNum(box.children.length) + ' سطر';
+  return el;
+}
+function txAgentText(text, append) {
+  if (!text) return;
+  if (!txAgent) txAgent = txLine('agent', '');
+  const t = txAgent.querySelector('.t'); t.textContent = append ? (t.textContent + text) : text;
+  $('#tx').scrollTop = $('#tx').scrollHeight;
+}
+function txHearing(text) {                  // what it hears right now (replaced when the caller's final words arrive)
+  if (!text) return;
+  if (!txLive) { txLive = txLine('caller', ''); txLive.classList.add('live'); }
+  txLive.querySelector('.t').textContent = text + ' …';
+}
+function txCaller(text, tag) {
+  if (txLive) { txLive.remove(); txLive = null; }
+  txLine('caller', text, tag ? `<span class="tag ${tag.keep ? 'keep' : ''}">${esc(tag.text)}</span>` : '');
+  txAgent = null;                            // the agent's next words start a new line
 }
 function toneFromWhy(why) {
   const w = why || '';
@@ -771,7 +844,8 @@ async function startCall() {
   starting = true; $('#endBtn').disabled = true;
   try { await ensureAudio(); await ctx.resume(); } catch (e) { decide('veto', 'المتصفح ما سمح بالمايك', ''); starting = false; $('#endBtn').disabled = false; return; }
   setCallButton(true); openSheet(false);
-  st.stops = []; st.replies = []; st.kept = 0; st.resumes = 0; st.parts = null; renderTiming(); $('#heard').textContent = '';
+  st.stops = []; st.replies = []; st.kept = 0; st.resumes = 0; st.vetoes = 0; st.parts = null; renderTiming();
+  $('#tx').innerHTML = ''; txAgent = null; txLive = null; $('#txCount').textContent = '';
   ui.started = Date.now(); ui.tickTimer();
   if (ws) { try { ws.onmessage = null; ws.close(); } catch (e) {} ws = null; }
   muteNow(); stopEpoch = -1; playEpoch = null; audioSent = 0; audioPlayed = 0;
@@ -801,7 +875,7 @@ async function onMessage(e) {
     if (m.state === 'loading') decide('', 'يجهّز العقل…', '');
     if (m.state === 'ready') { decide('', 'المكالمة بدأت', m.model ? `العقل: ${m.model}` : ''); }
     if (m.state === 'speaking') { agentSpeaks(agentText || undefined); if (!$('#status').classList.contains('is-stop')) decide('', 'المساعد يتكلم', ''); }
-    if (m.state === 'listening') { ui.agentDone(); agentText = ''; }
+    if (m.state === 'listening') { ui.agentDone(); agentText = ''; txAgent = null; }
     if (m.state === 'thinking') { ui.customerDone(); decide('', 'يفكر بالرد…', ''); }
     if (m.state === 'ended') endCall();
   }
@@ -812,11 +886,12 @@ async function onMessage(e) {
     if (!playable(m)) return;
     node.port.postMessage({enqueue: buf.getChannelData(0).slice(), id: m.id});
     agentText = ((agentText ? agentText + ' ' : '') + (m.text || '')).slice(-140); agentSpeaks(agentText);
+    txAgentText((m.text || '') + ' ', true);
   }
   if (m.type === 'pcm') {
     if (!playable(m)) return;
     node.port.postMessage({enqueue: upsample(m.pcm), id: m.id});
-    if (m.text) { agentText = (agentText + m.text).slice(-140); agentSpeaks(agentText); }
+    if (m.text) { agentText = (agentText + m.text).slice(-140); agentSpeaks(agentText); txAgentText(m.text, true); }
   }
   if (m.type === 'stop') {
     stopEpoch = m.epoch ?? stopEpoch; playEpoch = null;
@@ -824,18 +899,21 @@ async function onMessage(e) {
     st.stops.push(m.latency); renderTiming();
     ui.customerTalking(toneFromWhy(m.why) === 'noise' ? 'normal' : toneFromWhy(m.why));
     decide('stop', `✋ سكت عشان يسمعك · <span class="status__ms">${arNum(m.latency)} ms</span>`, `السبب: ${whyAr(m.why)}`);
+    if (txAgent) { txAgent.classList.add('cut'); txAgent.insertAdjacentHTML('beforeend', `<span class="tag">✋ قاطعته هنا · ${arNum(m.latency)} ms</span>`); }
+    txAgent = null;
   }
-  if (m.type === 'stop_vetoed') decide('veto', 'ما وقفت', m.why || 'صدى أو ضجيج');
+  if (m.type === 'stop_vetoed') { st.vetoes++; renderTiming(); decide('veto', 'ما وقفت', m.why || 'صدى أو ضجيج'); }
   if (m.type === 'hearing') {
-    if (m.text) $('#heard').textContent = `يسمع: «${m.text}»`;
+    if (m.text) txHearing(m.text);
     const tone = toneFromWhy(m.why);
     if (m.text && ui.turn !== 'agent') ui.customerTalking(tone);
     else if (m.text && tone !== 'normal') ui.setTone(tone);
     if (m.why && m.why.startsWith('كان تأييد')) { st.resumes++; renderTiming(); decide('keep', 'كان تأييد: رجع يكمّل', ''); }
   }
   if (m.type === 'chat') {
-    if (m.note && m.note.startsWith('تأييد')) { st.kept++; renderTiming(); decide('keep', 'سمعك وكمّل', `«${m.text}» = ${m.note === 'تأييد — يكمّل' ? 'تأييد، رجع يكمّل' : 'تأييد'}`); }
-    else if (m.role === 'caller' && m.text) $('#heard').textContent = `قلت: «${m.text}»`;
+    if (m.note && m.note.startsWith('تأييد')) { st.kept++; renderTiming(); decide('keep', 'سمعك وكمّل', `«${m.text}» = ${m.note === 'تأييد — يكمّل' ? 'تأييد، رجع يكمّل' : 'تأييد'}`);
+      const keepAgent = txAgent; txCaller(m.text, {text: 'تأييد: كمّل', keep: true}); txAgent = keepAgent; }
+    else if (m.role === 'caller' && m.text) txCaller(m.text, m.note === 'قاطع' ? {text: 'قاطع'} : null);
   }
   if (m.type === 'stat' && m.kind === 'reply') { st.replies.push(m.ms); if (m.parts) st.parts = m.parts; renderTiming(); }
 }
