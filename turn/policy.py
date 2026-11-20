@@ -97,6 +97,19 @@ def _load_model():
         return None
 
 
+
+def _heard_label(f: dict) -> str:
+    """What a taken-back stop turned out to be (metadata only: labels never change the score or a decision)."""
+    if f.get("echoed"):
+        return "echo"
+    if f.get("n", 0) == 0:
+        return "nonverbal"
+    if f.get("bc"):
+        return "backchannel"
+    if f.get("filler"):
+        return "hesitation"
+    return "other"
+
 class TurnTaker:
     def __init__(self, asr_fn=None):
         from .asr import transcribe
@@ -488,8 +501,9 @@ class TurnTaker:
         if tag[0] == "final":
             return self._maybe_resume(p, f, why)
         if speaking and not self.stopped and p >= MODEL_TH and not NEVER_STOP:
-            self.stop_info = {"t": self.ms, "cid": c["id"], "strong": f["bid"] >= 1 or p >= 0.95, "final": False}
-            return self._stop(why, c)
+            self.stop_info = {"t": self.ms, "cid": c["id"], "strong": f["bid"] >= 1 or p >= 0.95, "final": False,
+                              "text": text}
+            return self._stop(why, c, p)
         return None
 
     # ------------------------------------------------------------------ RESUME: take back a stop that was a backchannel
@@ -515,17 +529,22 @@ class TurnTaker:
         if p < RESUME_P and f["bid"] == 0 and (sem < 0 or sem < SEM_LO) and self.ms - (self.cand or {}).get("last", 0) >= 60:
             self.stopped, self.stop_info, self.cand = False, None, None
             self._log("RESUME", why=f"it was not a floor bid after all: {why}")
-            return {"decision": "RESUME", "label": "backchannel", "confidence": 0.7}
+            return {"decision": "RESUME", "label": _heard_label(f), "confidence": round(1.0 - p, 3),
+                    "transcript": (s.get("text") or "")[:120]}
         self.stop_info = None
         return None
 
-    def _stop(self, why, c):
+    def _stop(self, why, c, p=None):
         if NEVER_STOP:
             return None
         self.stopped = True
         self._log("STOP", why=why, text=c["text"])
-        label = "interruption"
-        return {"decision": "STOP", "label": label, "confidence": 0.8}
+        text = (c.get("text") or "").strip()
+        m = {"decision": "STOP", "label": "interruption" if text else "other",    # no words yet = the loud-speech safety net
+             "confidence": round(float(p), 3) if p is not None else 0.8}
+        if text:
+            m["transcript"] = text[:120]
+        return m
 
     # ------------------------------------------------------------------ optional: end of turn
     def _end_of_turn(self, is_speech: bool):
@@ -557,5 +576,8 @@ class TurnTaker:
         if silence >= wait:
             t["done"] = True
             self._log("TAKE_TURN", text=t["text"], waited=silence)
-            return "TAKE_TURN"
+            m = {"decision": "TAKE_TURN", "label": "end_of_turn"}
+            if (t["text"] or "").strip():
+                m["transcript"] = t["text"].strip()[:120]
+            return m
         return None
