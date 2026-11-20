@@ -154,7 +154,7 @@ async def _humain_voice(gender: str) -> str:
         c = await _humain_client()
         voices = await c.list_voices(timeout_seconds=5.0)
         want = HUMAIN_VOICES.get(gender, HUMAIN_VOICES["f"])
-        _humain["voices"][gender] = next((v["id"] for v in voices if v.get("name") == want), voices[0]["id"])
+        _humain["voices"][gender] = next((v["id"] for v in voices if (v.get("label") or v.get("name")) == want), voices[0]["id"])
     return _humain["voices"][gender]
 
 
