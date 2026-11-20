@@ -66,7 +66,7 @@ class Conversation:
         self.engine = engine
         self.reply_engine = "edge" if engine == "live" else engine   # used when the live voice is unavailable
         self.live = None
-        self.sc = SCENARIOS[scenario] if engine in ("edge", "live", "eleven") else as_male(SCENARIOS[scenario])
+        self.sc = SCENARIOS[scenario] if engine in ("edge", "live", "eleven", "humain") else as_male(SCENARIOS[scenario])
         self.tt = policy.TurnTaker()
         self.tt.on_scenario_start()
         self.score = LiveScore()
@@ -630,6 +630,8 @@ class Conversation:
         # open the brain and voice connections now (TCP + TLS) so the first reply does not wait for a handshake
         asyncio.create_task(asyncio.to_thread(brain.warm_connection))
         asyncio.create_task(asyncio.to_thread(voice.warm_connection, self.reply_engine))
+        if self.reply_engine == "humain":
+            asyncio.create_task(voice.warm_humain(self.sc["gender"]))
         if self.engine == "live":
             asyncio.create_task(self._connect_quietly())
         await self.speak_lines(self.sc["opening"])

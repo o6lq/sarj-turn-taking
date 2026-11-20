@@ -19,3 +19,4 @@ torch==2.15.0
 torchaudio==2.11.1
 transformers==5.23.0
 websockets==17.4
+humain-voice==0.19.0   # optional: HUMAIN Voice for the demo agent (convo/), never the scored path

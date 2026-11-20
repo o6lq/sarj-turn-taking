@@ -97,7 +97,7 @@ td.num{font-variant-numeric:tabular-nums;text-align:center}
   <div class="ctrl">
     <div><label>المكالمة</label><select id="scen"></select></div>
     <div><label>عقل الوكيل</label><select id="model"></select></div>
-    <div><label>الصوت</label><select id="eng"><option value="live">صوت Gemini المباشر (الأسرع والأطبع)</option><option value="eleven" id="elevenOpt" disabled>ElevenLabs (يحتاج مفتاح)</option><option value="edge">صوت سعودي (إنترنت، أبطأ)</option><option value="say">ماجد (بدون إنترنت، آلي)</option></select></div>
+    <div><label>الصوت</label><select id="eng"><option value="live">صوت Gemini المباشر (الأسرع والأطبع)</option><option value="humain" id="humainOpt" disabled>هيوماين فويس (يحتاج مفتاح)</option><option value="eleven" id="elevenOpt" disabled>ElevenLabs (يحتاج مفتاح)</option><option value="edge">صوت سعودي (إنترنت، أبطأ)</option><option value="say">ماجد (بدون إنترنت، آلي)</option></select></div>
     <div><label>المايك</label><select id="mic"><option value="auto">تلقائي (يكتشف السماعة)</option><option value="hp">سماعة رأس</option><option value="spk">سماعات اللابتوب</option></select></div>
   </div>
   <div class="row" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px"><button class="go" id="go">ابدأ المكالمة</button><button class="ghost" id="pre">فحص قبل العرض</button><button class="ghost" id="end">أنهِ المكالمة</button>
@@ -327,6 +327,7 @@ fetch('/scenarios').then(r => r.json()).then(d => {
   for (const [k, v] of Object.entries(d.scenarios)) $('#scen').insertAdjacentHTML('beforeend', `<option value="${k}">${esc(v)}</option>`);
   const names = {'gemini': 'Gemini — سحابي، الافتراضي', 'local-url': 'API أو LM Studio', 'gemma4-26b': 'Gemma 4 26B — الأفضل محلياً', 'gemma4-e4b': 'Gemma 4 E4B — خفيف', 'gemma-12b': 'Gemma 3 12B', 'qwen3-14b': 'Qwen3 14B', 'claude-opus': 'Claude Opus 5.5 — سحابي، أبطأ', 'claude-haiku': 'Claude Haiku 5.5 — سحابي'};
   if (d.voices && d.voices.eleven) { $('#elevenOpt').disabled = false; $('#elevenOpt').textContent = 'ElevenLabs'; }
+  if (d.voices && d.voices.humain) { $('#humainOpt').disabled = false; $('#humainOpt').textContent = 'هيوماين فويس (سعودي)'; }
   for (const [k, ok] of Object.entries(d.models)) if (ok) $('#model').insertAdjacentHTML('beforeend', `<option value="${k}">${names[k] || k}</option>`);
 });
 const fmt = (v, d) => v === null || v === undefined ? '—' : v.toFixed(d);

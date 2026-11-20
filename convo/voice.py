@@ -1,6 +1,7 @@
 """The agent's voice. Two engines:
   edge  - Microsoft neural Saudi voices (natural, needs internet, ~1-3 s to the first sound)
   say   - macOS «Majed» (offline, fast, more robotic) - automatic fallback
+  humain - HUMAIN Voice (Saudi, Arabic-first; needs HUMAIN_API_KEY; demo only, never the scored path)
 Short fillers («طيب»، «إيه نعم») are synthesised once and cached on disk so they play instantly while the
 brain is still thinking, the way a person says «طيب…» before answering.
 """
@@ -124,6 +125,64 @@ def _eleven(text: str, gender: str) -> np.ndarray:
     return np.frombuffer(http_pool.post(url, body, headers, 15), dtype="<i2").copy()   # kept alive: no TLS per sentence
 
 
+HUMAIN_URL = "https://api.voice.humain.com"
+HUMAIN_VOICES = {"f": "mul_nourah", "m": "mul_abdullah"}     # Saudi (ars) profiles; HUMAIN_VOICE_ID overrides
+HUMAIN_STYLE = "[call_center]"                                # style tag, not billed
+_humain = {"client": None, "loop": None, "voices": {}}
+
+
+def humain_ready() -> bool:
+    return bool(os.environ.get("HUMAIN_API_KEY"))
+
+
+async def _humain_client():
+    """One Socket.IO connection kept open for the whole demo, so each sentence skips the handshake."""
+    from humain_voice import tts as htts
+    loop = asyncio.get_running_loop()
+    if _humain["client"] is None or _humain["loop"] is not loop:
+        c = htts.TTSClient(api_url=os.environ.get("HUMAIN_API_URL", HUMAIN_URL), api_key=os.environ["HUMAIN_API_KEY"])
+        await c.__aenter__()
+        _humain.update(client=c, loop=loop)
+    return _humain["client"]
+
+
+async def _humain_voice(gender: str) -> str:
+    chosen = os.environ.get("HUMAIN_VOICE_ID")
+    if chosen:
+        return chosen
+    if gender not in _humain["voices"]:
+        c = await _humain_client()
+        voices = await c.list_voices(timeout_seconds=5.0)
+        want = HUMAIN_VOICES.get(gender, HUMAIN_VOICES["f"])
+        _humain["voices"][gender] = next((v["id"] for v in voices if v.get("name") == want), voices[0]["id"])
+    return _humain["voices"][gender]
+
+
+async def _humain_tts(text: str, gender: str) -> np.ndarray:
+    from humain_voice import tts as htts
+    try:
+        c = await _humain_client()
+        pcm = await c.synthesize(f"{HUMAIN_STYLE} {text}", await _humain_voice(gender), model=htts.TtsModel.Nebula,
+                                 timeout_seconds=8.0)
+    except Exception:
+        _humain["client"] = None                 # reconnect next time
+        raise
+    x = np.frombuffer(pcm, dtype="<i2").copy()   # PCM16 mono 24 kHz = RATE, no resampling
+    if htts.get_sample_rate(htts.TtsModel.Nebula) != RATE:
+        from scipy import signal
+        x = signal.resample_poly(x, RATE, htts.get_sample_rate(htts.TtsModel.Nebula)).astype(np.int16)
+    return x
+
+
+async def warm_humain(gender: str = "f") -> bool:
+    """Connect and look up the voice before the first reply. Never raises."""
+    try:
+        return humain_ready() and bool(await _humain_voice(gender))
+    except Exception:
+        _humain["client"] = None
+        return False
+
+
 def warm_connection(engine: str) -> bool:
     """Open the TTS connection before the first reply. Never raises."""
     return engine == "eleven" and eleven_ready() and http_pool.warm(ELEVEN_URL)
@@ -162,6 +221,18 @@ async def tts(text: str, gender: str = "f", engine: str = "edge") -> tuple[np.nd
                 CACHE.mkdir(parents=True, exist_ok=True)
                 np.save(f, x)
             return x, "eleven"
+        except Exception:
+            engine = "edge"
+    if engine == "humain":
+        f = CACHE / f"{_key('humain', os.environ.get('HUMAIN_VOICE_ID') or gender, text)}.npy"
+        if f.exists():
+            return np.load(f), "humain"
+        try:
+            x = await _humain_tts(text, gender)
+            if len(text) < CACHE_CHARS:
+                CACHE.mkdir(parents=True, exist_ok=True)
+                np.save(f, x)
+            return x, "humain"
         except Exception:
             engine = "edge"
     if engine == "say" and not mac:                  # no macOS «say» on Windows / Linux: use Edge

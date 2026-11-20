@@ -141,7 +141,7 @@ class H(BaseHTTPRequestHandler):
         if u.path == "/scenarios":
             from convo.scenarios import SCENARIOS
             from convo import brain, voice
-            return self._send(json.dumps({"scenarios": {k: v["title"] for k, v in SCENARIOS.items()}, "voices": {"eleven": voice.eleven_ready()},
+            return self._send(json.dumps({"scenarios": {k: v["title"] for k, v in SCENARIOS.items()}, "voices": {"eleven": voice.eleven_ready(), "humain": voice.humain_ready()},
                                           "models": brain.available()}, ensure_ascii=False).encode(), "application/json")
         if u.path == "/calls":
             return self._send(json.dumps(dev_calls(), ensure_ascii=False).encode(), "application/json")
