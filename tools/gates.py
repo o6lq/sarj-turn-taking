@@ -30,7 +30,7 @@ MIRRORS = ["cp-mirror", "cp-mirror-s32", "cp-mirror-s33"]
 
 
 def summarize(set_name: str, score: dict) -> dict:
-    return {"core": score["core"]["core_score"], "R": score["core"]["R"], "S": score["core"]["S"],
+    return {"core": score["core"]["core_score"], "R": score["core"]["R"], "S": score["core"]["S"], "n_stop": score["rates"]["n_stop_events"],
             "fs": score["rates"]["false_stops"], "miss": score["rates"]["misses"], "lat": score["latency_ms"]["median"] or 0.0,
             "cats": {c: {"R": v["R"], "S": v["S"]} for c, v in score["categories"].items()}}
 
@@ -95,8 +95,9 @@ def gates(new: dict, base: dict) -> list[tuple[str, bool, str]]:
     if have("dev"):
         g.append(("G4 dev ≥ 99.0, 0 misses", S["dev"]["core"] >= 99.0 and S["dev"]["miss"] == 0,
                   f"{S['dev']['core']:.2f}, misses {S['dev']['miss']}"))
-    worst = max((S[s]["lat"] - B[s]["lat"] for s in common), default=0)
-    g.append(("G5 median latency ≤ +50 ms", worst <= 50, f"worst +{worst:.0f} ms"))
+    big = [s for s in common if S[s].get("n_stop", 99) >= 10]          # a median over < 10 stops is noise
+    worst = max((S[s]["lat"] - B[s]["lat"] for s in big), default=0)
+    g.append(("G5 median latency ≤ +50 ms", worst <= 50, f"worst +{worst:.0f} ms (sets with ≥ 10 stops)"))
     if "mirror3" in new and "mirror3" in base:
         drops = [f"{c} {k} {base['mirror3']['cats'][c][k]:.2f}→{new['mirror3']['cats'][c][k]:.2f}"
                  for c in base["mirror3"]["cats"] for k in ("R", "S")

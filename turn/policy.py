@@ -46,7 +46,7 @@ NEVER_STOP = 0           # 1: only record features (used to build training data)
 USE_SPEAKER = 1          # compare with the caller's own voiceprint
 SPK_MIN = 0.30           # below this similarity it is someone else (TV, a child across the room)... (CAM++ scale)
 SPK_LOUD_DB = -2.0       # ...unless it is clearly louder than the caller usually is
-HYB_TH = 0.2            # hybrid: below this learned probability a rule-based stop is vetoed
+HYB_TH = 0.3            # hybrid: below this learned probability a rule-based stop is vetoed (F8: 0.2 -> 0.3)
 PROMOTE_TH = 0.95        # hybrid: above this learned probability the model may stop on its own (1.01 = never)
 PROMOTE_REL_DB = 4.0     # ...only when the voice is about as loud as the caller's
 EOT_SMART = 0            # 1: also ask Smart Turn v3.2 (voice-based end-of-turn) before taking the turn
