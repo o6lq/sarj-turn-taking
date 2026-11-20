@@ -90,6 +90,15 @@ STRESS = {
                      "doubled tokens, agreement phrases, dialect forms, 1-5 words, falling tone, listening only."),
 }
 
+EXTRA = {   # banks added after Phase 1: hesitation variety (the mirror's weakest category)
+    "S8": ("HT", 10, "Hesitation and thinking while the agent is still talking. 7 KEEP: a filled pause that goes on; a "
+                     "half-started word that trails off; self-talk like 'let me see / let me remember' not addressed to the "
+                     "agent; weighing aloud two options the agent just offered, to oneself, without choosing yet; recalling "
+                     "a detail aloud; repeating a number or name the agent said while writing it down; a long thinking "
+                     "«طيب…» or «يعني…». 3 STOP controls: after a short hesitation the caller clearly takes the floor with a "
+                     "request or question to the agent (mark the evident word)."),
+}
+
 SCHEMA = """Return JSON: {"calls": [ ... ]}, one object per call, with exactly these keys:
 - "use_case": short Arabic description of the call
 - "dialect": one of sa-najdi, sa-hijazi, sa-southern, sa-eastern, sa-northern, gulf-kuwaiti, gulf-emirati, gulf-bahraini, gulf-qatari
@@ -209,6 +218,22 @@ def main(argv=None) -> int:
         save()                                                           # never lose a finished batch
         print(f"  {bank_name:11s} {keys}: {sum(len(v) for v in got.values())} calls ({time.time() - t0:.0f}s)", flush=True)
 
+    if "ht-dev" in want or "ht-test" in want:
+        for name in ("ht-dev", "ht-test"):
+            if name not in want or "S8" in bank.get(name, {}):
+                continue
+            other = "ht-dev" if name == "ht-test" else "ht-test"           # the two banks stay disjoint either way
+            avoid = {"S8": [c.get("u1") for c in bank.get(other, {}).get("S8", [])]} or None
+            try:
+                got = ask([("S8", EXTRA["S8"][1], EXTRA["S8"][2])], a.seed + zlib.crc32(name.encode()) % 1000, avoid)
+            except RuntimeError as e:
+                print(f"  {name}: gave up ({e})", flush=True)
+                continue
+            for c in got["S8"]:
+                c["category"], c["probe"] = "HT", "S8"
+            bank.setdefault(name, {})["S8"] = got["S8"]
+            save()
+            print(f"  {name}: {len(got['S8'])} calls", flush=True)
     with ThreadPoolExecutor(3) as ex:
         futs = []
         if "mirror" in want:

@@ -475,7 +475,7 @@ def main(argv=None) -> int:
     out = Path(a.out)
     (out / "audio").mkdir(parents=True, exist_ok=True)
     (out / "labels").mkdir(parents=True, exist_ok=True)
-    tag = {"mirror": "M", "stress-dev": "d", "stress-test": "t"}.get(a.which, "X")
+    tag = {"mirror": "M", "stress-dev": "d", "stress-test": "t", "ht-dev": "h", "ht-test": "k"}.get(a.which, "X")
     scen, counts, problems = [], {}, []
     for i, (c, (p, _), rng) in enumerate(zip(calls, plans, rngs)):
         key = c.get("probe") or c["category"]

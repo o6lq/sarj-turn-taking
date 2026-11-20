@@ -25,7 +25,7 @@ from tools.sim import simulate  # noqa: E402
 from ttbench.score import aggregate  # noqa: E402
 
 SETS = ["dev", "dev-aug", "novel-test", "synth-test", "novel-test-2", "cp-mirror", "cp-mirror-s32", "cp-mirror-s33",
-        "cp-stress-dev", "cp-stress-test"]
+        "cp-stress-dev", "cp-stress-test", "cp-ht-dev", "cp-ht-test"]
 MIRRORS = ["cp-mirror", "cp-mirror-s32", "cp-mirror-s33"]
 
 
@@ -71,7 +71,7 @@ def run_all(name: str, overrides: dict, sets: list[str], reuse: set[str] | None 
         out["sets"][s] = summarize(s, sc)
         x = out["sets"][s]
         print(f"  {s:15s} core {x['core']:5.1f}  R {x['R']:.2f}  S {x['S']:.2f}  FS {x['fs']:3d}  miss {x['miss']}  ({time.time() - t0:.0f}s)", flush=True)
-        if s.startswith("cp-stress"):
+        if s.startswith(("cp-stress", "cp-ht")):
             out["probes"][s] = probes(rd, d)
     if all(m in runs for m in MIRRORS):
         out["mirror3"] = combined_mirror(runs)
@@ -117,7 +117,7 @@ def baseline_from_runs():
         sc = json.loads((rd / "score.json").read_text(encoding="utf-8"))
         out["sets"][s] = summarize(s, sc)
         runs[s] = rd
-        if s.startswith("cp-stress"):
+        if s.startswith(("cp-stress", "cp-ht")):
             out["probes"][s] = probes(rd, KIT / "data" / s)
     out["mirror3"] = combined_mirror(runs)
     (KIT / "runs" / "gates-v2.0.json").write_text(json.dumps(out, indent=1, ensure_ascii=False))
