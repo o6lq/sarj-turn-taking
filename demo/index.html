@@ -232,7 +232,8 @@ let stopEpoch = -1, playEpoch = null;      // B2: agent audio older than the las
 function playable(m) {
   const ep = m.epoch ?? 0;
   if (ep < stopEpoch) return false;
-  if (ep !== playEpoch) { node.port.postMessage({start: ep}); playEpoch = ep; }
+  node.port.postMessage({start: ep}); playEpoch = ep;    // always unmute for current audio (any earlier stop may have muted)
+  if (ctx.state !== 'running') ctx.resume();
   return true;
 }
 let ctx, node, ws, srcNode = null, bub = null, micSilent = 0, micSettings = null, levelProbe = null, micUsed = 'spk';

@@ -15,8 +15,8 @@ URL = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v
 MODEL = os.environ.get("TT_LIVE_MODEL", "gemini-2.5-flash-native-audio-latest")
 VOICES = {"m": "Orus", "f": "Aoede"}
 RATE = 24000
-CONNECT_TIMEOUT_S = 6
-FIRST_SOUND_TIMEOUT_S = 5
+CONNECT_TIMEOUT_S = 3          # was 6: a hung live voice made the reply ~11 s late
+FIRST_SOUND_TIMEOUT_S = 2.5    # first sound is ~0.8 s when it works
 NEXT_SOUND_TIMEOUT_S = 5
 
 

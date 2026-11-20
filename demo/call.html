@@ -666,12 +666,24 @@ class P extends AudioWorkletProcessor {
   }
 }
 registerProcessor('p', P);`;
-let stopEpoch = -1, playEpoch = null;
+let stopEpoch = -1, playEpoch = null, pageMuted = true;     // pageMuted mirrors the player: true after ANY stop we sent
+let audioSent = 0, audioPlayed = 0, watchdog = null;
+function muteNow() { node.port.postMessage({stop: true}); pageMuted = true; }
 function playable(m) {
   const ep = m.epoch ?? 0;
   if (ep < stopEpoch) return false;
-  if (ep !== playEpoch) { node.port.postMessage({start: ep}); playEpoch = ep; }
+  if (pageMuted || ep !== playEpoch) { node.port.postMessage({start: ep}); playEpoch = ep; pageMuted = false; }
+  if (ctx.state !== 'running') ctx.resume();            // the browser may have suspended audio (output device changed…)
+  audioSent++;
+  if (!watchdog) watchdog = setTimeout(checkPlayback, 4000);
   return true;
+}
+function checkPlayback() {                               // audio reached the page but nothing played: say so, and retry once
+  watchdog = null;
+  if (audioSent && !audioPlayed && callOn) {
+    decide('veto', 'الصوت وصل بس ما اشتغل', 'جرّب: اضغط على الصفحة، أو تأكد من مخرج الصوت (السماعة)');
+    ctx.resume(); node.port.postMessage({start: playEpoch ?? 0}); pageMuted = false;
+  }
 }
 let ctx, node, ws, srcNode = null, micSettings = null, levelProbe = null, micUsed = 'spk', callOn = false, agentText = '';
 async function chosenMicMode() {
@@ -717,6 +729,7 @@ async function ensureAudio() {
       if (d.frame) {
         if (ui.muted) { const s = new Int16Array(d.frame); for (let i = 1; i < s.length; i += 2) s[i] = 0; }   // mute = silence on the caller channel
         if (levelProbe) levelProbe(d.frame);
+        if (audioSent && !audioPlayed) { const s = new Int16Array(d.frame); for (let i = 0; i < s.length; i += 16) if (s[i]) { audioPlayed++; break; } }   // the agent channel really sounds
         if (ui.turn === 'customer' && !ui.muted) ui.setLevel(frameLevel(d.frame));
       }
       if (!ws || ws.readyState !== 1) return;
@@ -752,14 +765,18 @@ function setCallButton(on) {
   $('#live').style.background = on ? '#5fd08f' : '#8f89c4';
 }
 setCallButton(false);
+let starting = false;
 async function startCall() {
-  try { await ensureAudio(); await ctx.resume(); } catch (e) { decide('veto', 'المتصفح ما سمح بالمايك', ''); return; }
+  if (starting) return;                                  // one start at a time (the mic check takes 3 s)
+  starting = true; $('#endBtn').disabled = true;
+  try { await ensureAudio(); await ctx.resume(); } catch (e) { decide('veto', 'المتصفح ما سمح بالمايك', ''); starting = false; $('#endBtn').disabled = false; return; }
   setCallButton(true); openSheet(false);
   st.stops = []; st.replies = []; st.kept = 0; st.resumes = 0; st.parts = null; renderTiming(); $('#heard').textContent = '';
   ui.started = Date.now(); ui.tickTimer();
-  node.port.postMessage({stop: true}); stopEpoch = -1; playEpoch = null;
+  if (ws) { try { ws.onmessage = null; ws.close(); } catch (e) {} ws = null; }
+  muteNow(); stopEpoch = -1; playEpoch = null; audioSent = 0; audioPlayed = 0;
   const level = await micLevelCheck();
-  if (ws) { try { ws.onmessage = null; ws.close(); } catch (e) {} }
+  starting = false; $('#endBtn').disabled = false;
   ws = new WebSocket(settings.server || 'ws://127.0.0.1:8771');
   ws.onerror = () => decide('veto', 'ما قدرت أتصل بالخادم', settings.server);
   ws.onopen = () => ws.send(JSON.stringify({type: 'convo_start', scenario: settings.scen || $('#scen').value, engine: settings.eng || $('#eng').value,
@@ -768,8 +785,9 @@ async function startCall() {
   showScenario();
 }
 function endCall() {
-  closeMic(); if (node) node.port.postMessage({stop: true});
+  closeMic(); if (node) muteNow();
   if (ws && ws.readyState === 1) ws.send(JSON.stringify({type: 'convo_end'}));
+  if (ws) { try { ws.onmessage = null; ws.close(); } catch (e) {} ws = null; }
   setCallButton(false); ui.agentDone(); decide('', 'انتهت المكالمة', ''); showScenario();
 }
 ui.on('end', () => callOn ? endCall() : startCall());
@@ -802,7 +820,7 @@ async function onMessage(e) {
   }
   if (m.type === 'stop') {
     stopEpoch = m.epoch ?? stopEpoch; playEpoch = null;
-    node.port.postMessage({stop: true});
+    muteNow();
     st.stops.push(m.latency); renderTiming();
     ui.customerTalking(toneFromWhy(m.why) === 'noise' ? 'normal' : toneFromWhy(m.why));
     decide('stop', `✋ سكت عشان يسمعك · <span class="status__ms">${arNum(m.latency)} ms</span>`, `السبب: ${whyAr(m.why)}`);
