@@ -97,23 +97,30 @@ class Conversation:
         self.spec = None                         # a reply being written before the turn is given (see SPECULATE_AT_MS)
         self.hold = None                         # set when that reply may be heard
         self.parts = {}                          # where the time to the first reply audio went
+        self.epoch = 0                           # +1 on every STOP; audio made before it is never sent (B2)
 
     # ------------------------------------------------------------------ speaking
     def synth(self, text: str, engine: str | None = None) -> asyncio.Task:
         return asyncio.create_task(voice.tts(text, self.sc["gender"], engine or self.engine))
 
     async def say_chunk(self, text: str, filler: bool = False, audio: asyncio.Task | None = None):
+        ep = self.epoch
         x, used = await (audio or self.synth(text))
-        if not await self._may_speak():
-            return
+        if not await self._may_speak() or ep != self.epoch:
+            return                               # a STOP came while the voice was being made
         cid = await self._open_chunk(text, round(len(x) * 16000 / voice.RATE), filler)
-        await self.send({"type": "say", "id": cid, "wav": wav_b64(x), "text": text, "voice": used})
+        if ep != self.epoch or self.state not in ("speaking", "thinking"):
+            return
+        await self.send({"type": "say", "id": cid, "wav": wav_b64(x), "text": text, "voice": used, "epoch": self.epoch})
 
     async def _play_pcm(self, pcm: bytes, text: str):
-        if not await self._may_speak():
+        ep = self.epoch
+        if not await self._may_speak() or ep != self.epoch:
             return
         cid = await self._open_chunk(text, round(len(pcm) / 2 * 16000 / voice.RATE), False)
-        await self.send({"type": "pcm", "id": cid, "pcm": base64.b64encode(pcm).decode(), "text": text, "voice": "live"})
+        if ep != self.epoch or self.state not in ("speaking", "thinking"):
+            return
+        await self.send({"type": "pcm", "id": cid, "pcm": base64.b64encode(pcm).decode(), "text": text, "voice": "live", "epoch": self.epoch})
 
     def _alive(self) -> bool:
         """The current reply is still wanted: the agent is talking or about to, or it is a draft not yet thrown away."""
@@ -418,6 +425,7 @@ class Conversation:
             # demo guard: no clear caller words (the agent's own voice from the speakers, noise) → keep talking
             self.tt.stopped, self.tt.cand = False, None
             await self.send({"type": "hearing", "text": "", "why": "تجاهل صوت بدون كلام واضح (صدى/ضجيج)"})
+            await self.send({"type": "stop_vetoed", "why": "صدى/ضجيج أو كلمة تأييد وحدة"})   # B3: never silently
             dec = None
         if dec == "STOP" and self.state in ("speaking", "thinking"):
             c = self.tt.cand
@@ -429,7 +437,8 @@ class Conversation:
             if self.task and not self.task.done():
                 self.task.cancel()
             self.stop_ms = self.ms
-            await self.send({"type": "stop", "latency": self.ms - self.interrupted_at, "why": self.tt.trace[-1].get("why", "")})
+            self.epoch += 1
+            await self.send({"type": "stop", "latency": self.ms - self.interrupted_at, "why": self.tt.trace[-1].get("why", ""), "epoch": self.epoch})
             await self.send({"type": "status", "state": "listening"})
             self.tt.on_agent_end()
             self.listen_since = self.ms
@@ -510,11 +519,12 @@ class Conversation:
         """Stop only for clear words from the caller that are not the agent's own sentence coming back."""
         c = self.tt.cand
         f = (c or {}).get("feats")
-        if not f or f["n"] < 1 or f["echo_ratio"] >= 0.5:
+        headset = (getattr(self, "mic", None) or {}).get("mode") == "hp"   # B3: no speaker echo with a headset
+        if not f or f["n"] < 1 or (f["echo_ratio"] >= 0.5 and not headset):
             return False
         n = max(1, int((self.ms - c["start"]) // 20))
         recent = self.echo_flags[-n:]
-        if recent and sum(1 for e in recent if not e) / len(recent) < 0.3:
+        if not headset and recent and sum(1 for e in recent if not e) / len(recent) < 0.3:
             return False                                 # mostly the agent's own voice coming back
         words = lexicon.analyse(c.get("text", ""), getattr(self, "turn_text", ""))
         if words["single_ack"] or words["fluent_msa"]:

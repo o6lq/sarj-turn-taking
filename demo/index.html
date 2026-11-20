@@ -192,15 +192,16 @@ fetch('/results').then(r => r.json()).then(R => {
 // ------------------------------------------------ live call (same audio path as the tested try-out page)
 const worklet = `
 class P extends AudioWorkletProcessor {
-  constructor(){ super(); this.q = []; this.cur = null; this.pos = 0; this.gain = 1; this.fading = false;
+  constructor(){ super(); this.q = []; this.cur = null; this.pos = 0; this.gain = 1; this.fading = false; this.muted = false;
     this.ratio = sampleRate / 16000; this.bA = []; this.bM = []; this.p = 0; this.fa = []; this.fc = [];
     this.port.onmessage = e => { const d = e.data;
-      if (d.enqueue) this.q.push({id: d.id, buf: d.enqueue});
-      if (d.stop) this.fading = true; }; }
+      if (d.start !== undefined) this.muted = false;
+      if (d.enqueue && !this.muted) this.q.push({id: d.id, buf: d.enqueue});
+      if (d.stop) { this.q = []; this.muted = true; if (this.cur) this.fading = true; } }; }
   process(inputs, outputs){
     const mic = inputs[0] && inputs[0][0] ? inputs[0][0] : null; const out = outputs[0][0];
     for (let i = 0; i < out.length; i++) {
-      if (!this.cur && this.q.length && !this.fading) { this.cur = this.q.shift(); this.pos = 0; this.gain = 1; }
+      if (!this.cur && this.q.length && !this.fading && !this.muted) { this.cur = this.q.shift(); this.pos = 0; this.gain = 1; }
       let a = 0;
       if (this.cur) {
         a = this.cur.buf[this.pos++] * this.gain;
@@ -208,7 +209,7 @@ class P extends AudioWorkletProcessor {
           if (this.gain === 0) { this.port.postMessage({stopped: {id: this.cur.id, played: Math.round(this.pos / this.ratio)}}); this.cur = null; this.q = []; this.fading = false; } }
         if (this.cur && this.pos >= this.cur.buf.length) { const id = this.cur.id; this.cur = null;
           this.port.postMessage({chunkEnded: id}); if (!this.q.length) this.port.postMessage({idle: true}); }
-      } else if (this.fading) this.fading = false;
+      }
       out[i] = a; this.bA.push(a); this.bM.push(mic ? mic[i] : 0);
     }
     const r = this.ratio, w = Math.max(1, Math.round(r));
@@ -227,6 +228,13 @@ class P extends AudioWorkletProcessor {
   }
 }
 registerProcessor('p', P);`;
+let stopEpoch = -1, playEpoch = null;      // B2: agent audio older than the last stop is never played
+function playable(m) {
+  const ep = m.epoch ?? 0;
+  if (ep < stopEpoch) return false;
+  if (ep !== playEpoch) { node.port.postMessage({start: ep}); playEpoch = ep; }
+  return true;
+}
 let ctx, node, ws, srcNode = null, bub = null, micSilent = 0, micSettings = null, levelProbe = null, micUsed = 'spk';
 async function chosenMicMode() {             // auto: a headset only when the sound output really is one; otherwise speakers with echo cancellation
   const pick = $('#mic').value;
@@ -336,7 +344,7 @@ $('#go').onclick = async () => {
   try { await ensureAudio(); } catch (e) { setState('', 'المتصفح ما سمح بالمايك'); return; }
   await ctx.resume();
   $('#chat').innerHTML = ''; bub = null; st.stops = []; st.replies = []; st.res = 0; resetScore();
-  $('#go').disabled = true; node.port.postMessage({stop: true});
+  $('#go').disabled = true; node.port.postMessage({stop: true}); stopEpoch = -1; playEpoch = null;
   const level = await micLevelCheck();
   if (ws) { try { ws.onmessage = null; ws.close(); } catch (e) {} }
   ws = new WebSocket('ws://127.0.0.1:8771');
@@ -354,16 +362,20 @@ $('#go').onclick = async () => {
     }
     if (m.type === 'say') {
       const bytes = Uint8Array.from(atob(m.wav), c => c.charCodeAt(0));
+      if ((m.epoch ?? 0) < stopEpoch) return;
       const buf = await ctx.decodeAudioData(bytes.buffer);
+      if (!playable(m)) return;                  // a stop came while it was decoding
       node.port.postMessage({enqueue: buf.getChannelData(0).slice(), id: m.id});
       if (!bub) bub = bubble('agent', m.text); else bub.firstChild.textContent += ' ' + m.text;
     }
     if (m.type === 'score') renderScore(m);
     if (m.type === 'pcm') {
+      if (!playable(m)) return;
       node.port.postMessage({enqueue: upsample(m.pcm), id: m.id});
       if (m.text) { if (!bub) bub = bubble('agent', m.text); else bub.firstChild.textContent += m.text; }
     }
     if (m.type === 'stop') {
+      stopEpoch = m.epoch ?? stopEpoch; playEpoch = null;
       node.port.postMessage({stop: true}); setState('stop', `سكت عشان يسمعك (${m.latency} ms)`);
       if (bub) { bub.classList.add('cut'); bub.insertAdjacentHTML('beforeend', '<span class="tag">✋ قاطعته هنا</span>'); }
       bub = null; st.stops.push(m.latency); $('#sstop').textContent = avg(st.stops) + ' ms';
@@ -372,6 +384,7 @@ $('#go').onclick = async () => {
       if (m.note && m.note.startsWith('تأييد')) bubble('bc', m.text, m.note === 'تأييد — يكمّل' ? 'كان تأييد: رجع يكمّل' : 'سمعك وكمّل');
       else bubble('caller', m.text, m.note === 'قاطع' ? 'قاطعته' : '');
     }
+    if (m.type === 'stop_vetoed') setState('speak', 'ما وقفت: ' + (m.why || 'صدى/ضجيج'));   // B3: say so, never a silent veto
     if (m.type === 'hearing' && m.why && m.why.startsWith('كان تأييد')) { st.res++; $('#sres').textContent = ar(st.res); }
     if (m.type === 'stat' && m.kind === 'reply') { st.replies.push(m.ms); $('#sreply').textContent = avg(st.replies) + ' ms'; }
     if (m.type === 'stat' && m.kind === 'reply' && m.parts) {   // where the last reply's time went
