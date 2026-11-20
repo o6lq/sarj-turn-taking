@@ -273,6 +273,72 @@ def option_answer(caller_text: str, options: set[str]) -> dict:
     return {"option": n, "hits": hits, "strong": any(w in STRONG_CHOICE for w in ws), "accept": any(w in ACCEPT for w in ws)}
 
 
+# ---------------------------------------------------------------- F4: is a question/command word meant for the agent?
+# question, call and command words people also say to each other or to themselves («وين حطيتي…», «شوف مين…»,
+# «وش كان…؟»): they open a turn only when the words are about the call or addressed to the agent
+CUE = {norm(w) for w in "وش ايش شنو شو ليش ليه متى وين كيف مين منو كم شوف شوفي اسكت اسكتي تعال تعالي".split()}
+STRONG_BID = BID - CUE
+# calling someone in the room (not the agent)
+VOCATIVE_WORDS = {norm(w) for w in "ماما يمه يما يمي يبه يبا يبي بابا عيال ولد بنت يولد يابنت ياولد".split()}
+AGENT_TITLES = {norm(w) for w in "اخي اخوي اخت اختي استاذ استاذه أستاذ أستاذة الاخ الاخت الغالي الطيب".split()}
+# thinking aloud to oneself
+THINK_WORDS = {norm(w) for w in """كان كانت ربي يارب يارباه خلني خليني اشوف اشوفه افكر مدري ادري اتذكر نسيت وينه وينها وينهم
+شسمه اسمه اسمها ذاك ذيك حطيت حطيته حطيتها حطيتي حطيتوه وديت وديته وديتها وديتي لقيت لقيته لقيتها""".split()}
+SELF_ANSWER = [norm(p) for p in ["لا خلاص", "ايه صح", "ايوه هو", "ايه هو", "ايه هذا", "اي صح", "ايوه صح", "لا لا خلاص", "تذكرت", "لقيته", "لقيتها"]]
+# words about the call (money, dates, orders, accounts, appointments...) and words addressed to the agent
+DOMAIN = {norm(w) for w in """ريال ريالات المبلغ مبلغ السعر سعر الاسعار الفاتوره فاتوره الرسوم رسوم الطلب طلب طلبي الطلبيه الموعد موعد موعدي
+الحجز حجز التوصيل توصيل المندوب الباقه باقه باقتي الاشتراك اشتراك اشتراكي البطاقه بطاقه بطاقتي الحساب حساب حسابي الفرع فرع
+الخصم خصم العرض عرض الدفعه دفعه الدفعات القسط الاقساط الشحنه شحنه الطرد السياره سيارتي الصيانه الدكتور الدكتوره العياده
+النتايج النتيجه التحاليل الرقم رقم الكود الرمز العنوان عنوان التاريخ الوقت المده الشروط التفاصيل الفرق الضمان التامين
+التطبيق الموقع الرابط الرساله الخدمه العقد الغاء الالغاء التجديد السداد الاسترجاع الفلوس المبالغ الشهر الاسبوع""".split()}
+ADDRESS = {norm(w) for w in """انت انتي انتم عندكم عندك منكم معكم لكم لك تقول تقولين قلت قلتي تقصد تقصدين قصدك قصدكم يعني بالضبط تتصلون تتصل
+اتصلتوا اتصلت ترسلون ارسلتوا تبون تبين تقدر تقدرين تقدرون عطني عطيني قولي قل وضح وضحي اشرح اشرحي عيد عيدي""".split()}
+# backchannel and blessing phrases that are not content («الله يعطيك العافية» = thanks, carry on)
+BC_PHRASES = [norm(p) for p in ["الحمد لله", "الحمدلله", "بيض الله وجهك", "الله يبيض وجهك", "عز الله", "عاشت ايدك", "تسلم ايدك",
+                                  "عين العقل", "زين ما سويت", "الله يوفقك", "الله يسعدك", "يا هلا", "ما شاء الله", "تبارك الله", "يا سلام", "الله يعطيك العافيه", "يعطيك العافيه",
+                                  "الله يجزاك خير", "جزاك الله خير", "الله يسلمك", "الله يحفظك", "الله يخليك", "صح لسانك",
+                                  "على راسي", "من عيوني", "ابشر", "ابشري", "كفو", "زين والله", "والله زين", "ما قصرت",
+                                  "ماقصرت", "تسلم", "تسلمين", "مشكور", "مشكوره", "الله يبارك فيك", "حياك الله"]]
+
+
+_FUNCTION = {norm(w) for w in "اللي الي هذا هذي هاذا ذا ذي هذاك هذيك في من على علي الى عن مع انا هو هي احنا كذا كدا جذي الحين دحين بعد قبل عند حق".split()}
+
+
+def cue_analysis(text: str, context: str = "", agent_name: str = "") -> dict:
+    """F4: for a reading with question/call/command words, the cues that say whether it is for the agent.
+    context = what the agent has said (previous utterance + the part of this one heard so far)."""
+    t = norm(text)
+    ws = [squeeze(w) for w in t.split()]
+    ctx = {w for w in norm(context).split() if len(w) >= 3}
+    name = norm(agent_name or "")
+    strong = sum(1 for w in ws if w in STRONG_BID)
+    cue = sum(1 for w in ws if w in CUE)
+    voc = any(w in VOCATIVE_WORDS for w in ws)       # only clear calls to family / children, never a generic «يا …»
+    others = [w for w in ws if w not in CUE and w not in BACKCHANNEL and w not in FILLER and w not in AMBIG and len(w) >= 2]
+    content_words = [w for w in others if w not in _FUNCTION and w not in STRONG_BID and w not in THINK_WORDS]
+    topic = any(w in DOMAIN or w.lstrip("و") in DOMAIN or (len(w) >= 4 and (w in ctx or _fuzzy_in(w, ctx)))
+                or w in WEEKDAYS or w in DAYPARTS or w.isdigit() or w in ARABIC_DIGITS for w in content_words)
+    address = any(w in ADDRESS for w in ws)
+    think = any(w in THINK_WORDS for w in ws) or any(w in FILLER and w != "يعني" for w in ws) or any(p in t for p in SELF_ANSWER) \
+        or (text or "").rstrip().endswith(("…", "..."))
+    lone = cue >= 1 and not [w for w in others if w != "يعني"] and strong == 0
+    return {"strong_bid": strong, "cue": cue, "vocative": int(voc), "topic": int(topic), "address": int(address),
+            "think": int(think), "lone_cue": int(lone)}
+
+
+def bc_phrase(text: str) -> bool:
+    """The reading is a backchannel or blessing phrase («ما شاء الله، الله يعطيك العافية»): a known phrase, and at
+    most two more words that carry nothing (no bid word, nothing about the call, not addressed to the agent)."""
+    t = " " + norm(text) + " "
+    n0 = len(t.split())
+    for p in BC_PHRASES:
+        t = t.replace(" " + p + " ", " ")
+    if len(t.split()) == n0:
+        return False
+    rest = [w for w in t.split() if w not in BACKCHANNEL and w not in FILLER and w not in POLITE and w not in AMBIG]
+    return len(rest) <= 2 and not any(w in STRONG_BID or w in CUE or w in DOMAIN or w in ADDRESS for w in rest)
+
+
 def count_digits(text: str) -> int:
     t = norm(text)
     n = sum(1 for w in t.split() if w in ARABIC_DIGITS or w.lstrip("و") in ARABIC_DIGITS)

@@ -66,6 +66,10 @@ RESUME_MAX_VOICED_MS = 1200  # ...it was short...
 RESUME_P = 0.3           # ...and the full reading says it was not a floor bid
 OPTION_ANSWER = 1        # F2: picking an option the agent offered is a floor bid, not an echo
 OPTION_EARLY_MS = 400    # ...a candidate that opened this soon after the agent started counts as an answer
+CUE_MODE = 2             # F4 (1 = also needs topic evidence: too slow on real bids): question/call/command words stop only when about the call or addressed to the agent
+CUE_SPK_VETO = 0.10      # ...and never in a voice clearly not the caller's (when the voiceprint is known)
+SPK_HARD = 0.10          # any rule stop: a known voiceprint this far from the caller's = someone else...
+SPK_HARD_LOUD_DB = 3.0   # ...unless it is clearly louder than the caller usually is
 
 _MODELS = Path(__file__).resolve().parents[1] / "models"
 # the learned layer is trained on the words of ONE ASR engine, so each engine has its own weights
@@ -142,6 +146,7 @@ class TurnTaker:
         self.stop_info = None                # the last STOP, watched for a quick RESUME
         self.prev_agent_text = ""
         self.agent_utt = 0
+        self.agent_name = ""
 
     def on_scenario_start(self, context: dict | None = None):
         self.reset_call()
@@ -155,6 +160,10 @@ class TurnTaker:
         self.agent_active, self.agent_text, self.stopped = True, text, False
         self.agent_start_ms = self.ms
         self.turn = None
+        if not self.agent_name:
+            import re as _re
+            m = _re.search(r"مع(?:ك|اك|كم)\s+(\S+)", text or "")
+            self.agent_name = m.group(1).strip("،.") if m else ""
         self.agent_utt += 1
         if self.dlog:
             self.dlog.event({"call": self.call_no, "t": self.ms, "kind": "agent_start", "agent_utt": self.agent_utt,
@@ -323,6 +332,8 @@ class TurnTaker:
         if f["spk_sim"] < SPK_MIN and f["rel_db"] < SPK_LOUD_DB:
             return 0.05, f"not the caller's voice (similarity {f['spk_sim']:.2f})"
         rp, why = self._rules(f)
+        if CUE_MODE and rp >= MODEL_TH and f.get("spk_known") and f["spk_sim"] < SPK_HARD and f["rel_db"] < SPK_HARD_LOUD_DB:
+            return 0.1, f"{why}, but clearly not the caller's voice (similarity {f['spk_sim']:.2f})"
         if not self.model:
             return rp, why
         mp = self._model_p(f)
@@ -334,7 +345,8 @@ class TurnTaker:
         if rp >= MODEL_TH and mp < HYB_TH and not (USE_SEM and sem >= SEM_HI and sure_caller):
             return 0.25, f"{why}, but the model doubts it (p={mp:.2f})"
         knows_caller = len(self.ref_levels) >= 8           # it may act alone only once it has heard the caller
-        if rp < MODEL_TH and mp >= PROMOTE_TH and f["n"] >= 1 and f["rel_db"] > -PROMOTE_REL_DB and knows_caller:
+        if rp < MODEL_TH and mp >= PROMOTE_TH and f["n"] >= 1 and f["rel_db"] > -PROMOTE_REL_DB and knows_caller \
+                and not self._side_or_self(f):
             return mp, f"model is sure (p={mp:.2f}) although the words are unclear"
         return rp, f"{why} (model p={mp:.2f})"
 
@@ -352,7 +364,13 @@ class TurnTaker:
     def _rules(self, f: dict) -> tuple[float, str]:
         sem = f.get("sem_p", -1.0)
         has_sem = USE_SEM and sem >= 0
+        if CUE_MODE and f.get("bc_phrase"):
+            return 0.1, "a backchannel or blessing phrase"
         if f["bid"] >= 1:
+            if CUE_MODE:
+                v = self._cue_verdict(f)
+                if v:
+                    return v
             return 1.0, "floor-bid word"
         if f["repeated_ambig"]:
             return 0.9, "«خلاص/طيب» with more after it"
@@ -365,6 +383,8 @@ class TurnTaker:
                 and f["spk_sim"] >= SEM_SPK:
             return 0.85, f"the meaning asks for the floor (meaning p={sem:.2f})"
         if f["content"] >= CONTENT_MIN:
+            if CUE_MODE and f.get("cue_think") and not f.get("cue_address") and not f.get("cue_topic"):
+                return 0.2, "thinking aloud (talking to oneself)"
             if f["logprob"] < MIN_LOGPROB:
                 return 0.3, f"words unclear (confidence {f['logprob']:.2f})"
             if f["cand_age_s"] > CONTENT_MAX_AGE_S and f["rel_db"] < -4:
@@ -375,6 +395,32 @@ class TurnTaker:
                 return 0.2, f"looks like a question, but the meaning is an acknowledgement (meaning p={sem:.2f})"
             return 0.8, "question"
         return 0.1, "acknowledgement / filler" if f["n"] else "no words"
+
+    def _cue_verdict(self, f: dict):
+        """F4: a bid word is a floor bid only when it is the caller talking to the agent. None = it is a bid."""
+        about = f.get("cue_topic") or f.get("cue_address")
+        if f.get("cue_vocative") and not about:
+            return 0.1, "calls someone else in the room"
+        if f.get("cue_strong_bid"):
+            return None
+        if f.get("spk_known") and f["spk_sim"] < CUE_SPK_VETO:
+            return 0.1, f"question word in a voice that is not the caller's (similarity {f['spk_sim']:.2f})"
+        if f.get("cue_think") and not f.get("cue_address"):
+            return 0.15, "thinking aloud (a question word to oneself)"
+        if about:
+            return None
+        if f.get("cue_lone_cue"):
+            return 0.3, "a lone question word: waiting for more"
+        if CUE_MODE == 1:
+            return 0.2, "a question or command not about the call (side talk)"
+        return None                     # CUE_MODE 2: no positive sign of side/self talk -> still a bid
+
+    def _side_or_self(self, f: dict) -> bool:
+        """N1: patterns the learned model must not promote to a stop on its own."""
+        if not CUE_MODE:
+            return False
+        return bool(f.get("cue_vocative") or f.get("cue_think") or f.get("bc_phrase") or f.get("cue_lone_cue")
+                    or (f.get("spk_known") and f["spk_sim"] < SPK_HARD))   # 22 % of real bids read < 0.25: only clear cases
 
     def _on_asr(self, tag, res, ms):
         if tag[0] == "turn":
@@ -396,6 +442,11 @@ class TurnTaker:
         a = lexicon.analyse(text, self.agent_text)
         f = self._features(a, c)
         f.update(self._option_feats(text, c))
+        if CUE_MODE:
+            ca = lexicon.cue_analysis(text, self.heard_context(), self.agent_name)
+            f.update({"cue_" + k: v for k, v in ca.items()})
+            f["bc_phrase"] = int(lexicon.bc_phrase(text))
+            f["spk_known"] = int(c.get("spk") is not None)
         c["text"], c["feats"] = text, f
         p, why = self.score(f)
         self._log("asr", text=text, ms=round(ms), p=round(p, 2), why=why, rel_db=round(f["rel_db"], 1), f=f,
