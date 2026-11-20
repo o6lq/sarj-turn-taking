@@ -1,0 +1,826 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>مكالمة المساعد الصوتي</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+@property --glow{syntax:'<number>';inherits:true;initial-value:.2}
+/* =========================================================
+   الألوان والقيم الأساسية
+   - جسم المساعد أزرق دائماً (هويته) ولا يتغيّر لونه أبداً.
+   - لون الموجة فقط هو اللي يتغيّر حسب النبرة.
+   ========================================================= */
+:root{
+  --bg:#08005a;
+  --agent:#4f9fe0;
+  --agent-light:#8cc6f0;
+  --agent-pale:#a9d6f5;
+  --ink:#2b2a33;
+
+  --tone-angry:#e0675c;   /* غضب */
+  --tone-noise:#e8bd45;   /* ضوضاء */
+  --tone-follow:#4f9fe0;  /* يتابع الكلام */
+  --tone-think:#5fb487;   /* العميل يفكّر */
+  --tone-muted:#8f89c4;   /* مكتوم */
+
+  --text:#f4f2fc;
+  --text-2:#e4e1f5;
+  --text-3:#b9b4de;
+  --danger:#c4473d;
+  --danger-hover:#b13d34;
+
+  --pace:1;          /* سرعة حركة المساعد (أقل = أهدأ) */
+  --pose-t:.8s;      /* مدة انتقال القرب/الميلان */
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{
+  font-family:'IBM Plex Sans Arabic',system-ui,sans-serif;
+  background:var(--bg);color:var(--text);
+  overflow:hidden;
+}
+button{font-family:inherit}
+
+/* ===================== التخطيط ===================== */
+.call{
+  --wave:var(--tone-follow);
+  position:relative;height:100%;min-height:560px;
+  display:flex;flex-direction:column;justify-content:space-between;
+  padding:clamp(16px,3vw,32px) clamp(16px,3vw,40px) clamp(20px,4vh,40px);
+}
+.call__glow{
+  position:absolute;left:50%;top:46%;
+  width:min(760px,120vw);aspect-ratio:1;transform:translate(-50%,-50%);
+  border-radius:50%;pointer-events:none;
+  background:radial-gradient(circle, rgba(79,159,224,var(--glow,.2)) 0%, rgba(79,159,224,calc(var(--glow,.2)*.4)) 35%, transparent 62%);
+  transition:--glow 1s ease;
+}
+.top,.center,.controls{position:relative}
+
+/* الشريط العلوي */
+.top{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.chip{
+  display:flex;align-items:center;gap:12px;
+  background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.1);
+  border-radius:999px;padding:6px 6px 6px 18px;
+}
+.chip__icon{width:36px;height:36px;border-radius:12px;background:#fff;display:flex;align-items:center;justify-content:center;gap:6px;position:relative}
+.chip__icon i{width:5px;height:5px;border-radius:50%;background:var(--ink)}
+.chip__live{position:absolute;top:-3px;left:-3px;width:9px;height:9px;border-radius:50%;background:#5fd08f;box-shadow:0 0 0 2px var(--bg)}
+.chip__name{font-size:15px;font-weight:500;color:#f1effa}
+.chip__sep{width:4px;height:4px;border-radius:50%;background:#8f89c4}
+.chip__timer{font-size:15px;color:#c9c5e8;font-variant-numeric:tabular-nums}
+
+/* الوسط */
+.center{display:flex;flex-direction:column;align-items:center;gap:clamp(12px,2.4vh,20px)}
+.greeting{display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center}
+.greeting h1{margin:0;font-size:clamp(26px,3.4vw,36px);font-weight:600;line-height:1.3;color:var(--text)}
+.greeting p{margin:0;font-size:clamp(16px,1.8vw,19px);color:var(--text-3)}
+
+.status{
+  display:flex;align-items:center;justify-content:center;gap:10px;min-width:220px;
+  background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);
+  border-radius:999px;padding:10px 20px;font-size:16px;color:var(--text-2);
+  text-align:center;max-width:90vw;
+}
+.status__dot{width:8px;height:8px;border-radius:50%;background:var(--wave);flex:none;transition:background-color .6s ease}
+
+/* ===================== الموجة ===================== */
+.wave{
+  display:flex;align-items:center;justify-content:center;gap:4px;height:48px;
+}
+.wave span{
+  width:4px;height:48px;border-radius:2px;background:var(--wave);
+  transform:scaleY(.08);transform-origin:center;
+  transition:background-color .6s ease;
+  will-change:transform;
+}
+.wave__label{font-size:12px;color:#c9c5e8;min-height:18px}
+
+/* ===================== المساعد ===================== */
+.agent{
+  font-size:clamp(130px,22vmin,210px);  /* 1em = عرض جسم المساعد */
+  direction:ltr;  /* الوجه ما يتقلب مع RTL (عشان الحواجب تبقى متفهّمة مو معصّبة) */
+  position:relative;width:1.25em;height:1.25em;
+  display:flex;align-items:flex-end;justify-content:center;
+}
+.agent__halo{
+  position:absolute;inset:.06em;border-radius:50%;
+  background:conic-gradient(from 0deg,var(--agent-light),var(--agent),var(--agent-pale),var(--agent-light));
+  filter:blur(.2em);opacity:var(--halo,.4);
+  animation:spin calc(14s / var(--pace)) linear infinite;
+  transition:opacity 1s ease;
+}
+.agent__pose{
+  position:relative;transform-origin:center bottom;margin-bottom:.07em;
+  transition:transform var(--pose-t) cubic-bezier(.3,.7,.3,1);
+}
+.agent__motion{position:relative;width:1em;height:.92em;transform-origin:center bottom}
+.agent__shadow{position:absolute;bottom:-.08em;left:15%;width:70%;height:.08em;border-radius:50%;background:rgba(0,0,0,.4);filter:blur(6px)}
+.agent__body{
+  position:absolute;inset:0;
+  border-radius:52% 48% 44% 46% / 58% 56% 42% 44%;
+  background:
+    radial-gradient(circle at 30% 25%, rgba(255,255,255,.55) 0%, transparent 35%),
+    linear-gradient(150deg, rgba(255,255,255,.28) 0%, transparent 50%, rgba(0,0,0,.12) 100%);
+  background-color:var(--agent);
+  box-shadow:inset 0 -.08em .12em rgba(0,0,0,.08), inset 0 .04em .06em rgba(255,255,255,.4);
+  animation:morph calc(6s / var(--pace)) ease-in-out infinite;
+}
+.agent__brows{
+  position:absolute;top:21%;left:0;right:0;display:flex;justify-content:center;gap:.24em;
+  opacity:0;transform:translateY(.02em);transition:opacity .8s ease, transform .8s ease;
+}
+.agent__brows i{width:.14em;height:.03em;border-radius:3px;background:var(--ink)}
+.agent__brows i:first-child{transform:rotate(-12deg)}
+.agent__brows i:last-child{transform:rotate(12deg)}
+.agent__eyes{position:absolute;top:34%;left:0;right:0;display:flex;justify-content:center;align-items:center}
+.eye{
+  width:.26em;height:.26em;border-radius:50%;border:.028em solid var(--ink);
+  background:rgba(255,255,255,.18);display:flex;align-items:center;justify-content:center;
+}
+.eye i{width:.075em;height:.075em;border-radius:50%;background:var(--ink);animation:blink 5s ease-in-out infinite;transition:transform .6s ease}
+.bridge{width:.08em;height:.028em;background:var(--ink);border-radius:2px}
+.agent__cheeks{position:absolute;top:60%;left:0;right:0;display:flex;justify-content:center;gap:.38em}
+.agent__cheeks i{width:.12em;height:.06em;border-radius:50%;background:#ff9a8a;opacity:.55;filter:blur(2px)}
+.agent__mouthbox{position:absolute;top:63%;left:0;right:0;height:.1em;display:flex;justify-content:center;align-items:center}
+.mouth{
+  width:.14em;height:.07em;border:0 solid var(--ink);border-bottom-width:.022em;
+  border-radius:0 0 50% 50%;background:transparent;
+  transition:width .4s ease,height .4s ease,border-radius .4s ease,background-color .3s ease,border-width .3s ease;
+}
+
+/* ---- أوضاع المساعد ---- */
+/* يستمع: يهز راسه */
+.agent[data-mode="listen"] .agent__motion{animation:nod calc(2.4s / var(--pace)) ease-in-out infinite}
+/* يلاحظ: يوقف ويثبّت نظرته */
+.agent[data-mode="notice"] .agent__motion{animation:none}
+.agent[data-mode="notice"] .mouth{width:.1em;height:0;border-bottom-width:.03em;border-radius:3px}
+/* يهدأ (العميل منزعج): تنفّس بطيء + حواجب متفهّمة */
+.agent[data-mode="calm"]{--halo:.22}
+.agent[data-mode="calm"] .agent__motion{animation:breathe calc(4.5s / var(--pace)) ease-in-out infinite}
+.agent[data-mode="calm"] .agent__brows{opacity:1;transform:none}
+.agent[data-mode="calm"] .mouth{width:.1em;height:.045em}
+/* ينتظر (العميل يفكّر): تنفّس هادي وابتسامة، ما يستعجله */
+.agent[data-mode="wait"]{--halo:.28}
+.agent[data-mode="wait"] .agent__motion{animation:breathe calc(5s / var(--pace)) ease-in-out infinite}
+.agent[data-mode="wait"] .mouth{width:.1em;height:.045em}
+/* يقرّب (ضوضاء): يكبر ويميل كأنه يحاول يسمع */
+.agent[data-mode="lean"] .agent__pose{transform:scale(1.22) rotate(-8deg)}
+.agent[data-mode="lean"] .agent__motion{animation:lean calc(2.2s / var(--pace)) ease-in-out infinite}
+.agent[data-mode="lean"] .mouth{width:.08em;height:.08em;border-width:.022em;border-radius:50%}
+/* يتكلم */
+.agent[data-mode="speak"] .agent__motion{animation:bob calc(3s / var(--pace)) ease-in-out infinite}
+.agent[data-mode="speak"] .mouth{width:.1em;height:.07em;border-width:0;border-radius:50% 50% 45% 45%;background:var(--ink);animation:talk calc(.45s / var(--pace)) ease-in-out infinite}
+/* معدّلات فوق الوضع */
+.agent.is-close .agent__pose{transform:scale(1.22) rotate(-4deg)}     /* يبقى قريب وهو يرد بعد الضوضاء */
+.agent.is-gentle .agent__brows{opacity:1;transform:none}               /* يرد بهدوء بعد غضب */
+
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes morph{0%,100%{border-radius:50% 50% 50% 50%/50% 50% 50% 50%}25%{border-radius:58% 42% 52% 48%/46% 56% 44% 54%}50%{border-radius:46% 54% 44% 56%/56% 44% 58% 42%}75%{border-radius:53% 47% 57% 43%/43% 57% 47% 53%}}
+@keyframes blink{0%,92%,100%{transform:scaleY(1)}95%{transform:scaleY(.1)}}
+@keyframes nod{0%,100%{transform:translateY(0) rotate(0)}30%{transform:translateY(-4px) rotate(-3deg)}60%{transform:translateY(1px) rotate(0)}}
+@keyframes breathe{0%,100%{transform:scale(1)}50%{transform:scale(1.035)}}
+@keyframes lean{0%,100%{transform:scale(1) rotate(0)}50%{transform:scale(1.06) rotate(-3deg)}}
+@keyframes bob{0%,100%{transform:translateY(0) scale(1,1)}50%{transform:translateY(-6px) scale(.98,1.03)}}
+@keyframes talk{0%,100%{transform:scaleY(.4)}50%{transform:scaleY(1)}}
+
+/* ===================== أزرار التحكم ===================== */
+.controls{display:flex;align-items:flex-start;justify-content:center;gap:28px}
+.ctl{display:flex;flex-direction:column;align-items:center;gap:8px;font-size:13px;color:var(--text-3)}
+.round{
+  width:56px;height:56px;border-radius:50%;
+  border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.08);color:#f1effa;
+  display:flex;align-items:center;justify-content:center;cursor:pointer;transition:background .2s,color .2s;
+}
+.round:hover{background:rgba(255,255,255,.16)}
+.round[aria-pressed="true"]{background:#f1effa;color:var(--bg)}
+.round .slash{opacity:0;transition:opacity .2s}
+.round[aria-pressed="true"] .slash{opacity:1}
+.end{
+  height:56px;padding:0 26px 0 22px;border-radius:999px;border:0;
+  background:var(--danger);color:#fff;font-size:17px;font-weight:600;
+  display:flex;align-items:center;gap:10px;cursor:pointer;
+  box-shadow:0 10px 30px -10px rgba(196,71,61,.6);
+}
+.end:hover{background:var(--danger-hover)}
+button:focus-visible{outline:2px solid #fff;outline-offset:3px}
+
+@media (max-width:760px){
+  .demo{position:static;align-items:center;margin-top:8px}
+  .top{justify-content:center}
+  .controls{gap:18px}
+}
+@media (prefers-reduced-motion:reduce){
+  .agent *,.agent{animation:none!important;transition:none!important}
+}
+
+/* ===================== الإعدادات (فوق يمين) ===================== */
+.gear{width:44px;height:44px;border-radius:50%;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.08);
+  color:#f1effa;display:flex;align-items:center;justify-content:center;cursor:pointer;transition:background .2s,transform .4s}
+.gear:hover{background:rgba(255,255,255,.16)} .gear[aria-expanded="true"]{transform:rotate(60deg);background:#f1effa;color:var(--bg)}
+.sheet{position:absolute;top:calc(clamp(16px,3vw,32px) + 56px);right:clamp(16px,3vw,40px);z-index:10;width:min(360px,calc(100vw - 32px));
+  background:#120a6e;border:1px solid rgba(255,255,255,.14);border-radius:18px;padding:16px;box-shadow:0 20px 60px -20px rgba(0,0,0,.6);
+  display:flex;flex-direction:column;gap:12px}
+.sheet[hidden]{display:none}
+.sheet h2{margin:0;font-size:16px;font-weight:600;color:var(--text)}
+.field{display:flex;flex-direction:column;gap:6px;font-size:13px;color:var(--text-3)}
+.field select,.field input{font-family:inherit;font-size:14px;color:var(--text);background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.14);
+  border-radius:10px;padding:9px 10px;outline:none}
+.field select option{color:#111}
+.field input{direction:ltr;text-align:left}
+.sheet__note{font-size:12px;color:#a9a4d6;line-height:1.6}
+.sheet__row{display:flex;gap:8px}
+.btn{height:40px;padding:0 16px;border-radius:999px;border:0;font-family:inherit;font-size:14px;font-weight:600;cursor:pointer}
+.btn--ok{background:#5fd08f;color:#07202d}.btn--ghost{background:rgba(255,255,255,.1);color:var(--text)}
+/* ===================== القرار والتوقيت ===================== */
+.decision{display:flex;flex-direction:column;align-items:center;gap:8px;max-width:min(680px,92vw)}
+.status.is-stop{background:rgba(224,103,92,.18);border-color:rgba(224,103,92,.5)}
+.status.is-keep{background:rgba(95,180,135,.16);border-color:rgba(95,180,135,.45)}
+.status.is-veto{background:rgba(232,189,69,.15);border-color:rgba(232,189,69,.45)}
+.status__ms{font-variant-numeric:tabular-nums;font-weight:600;color:#fff}
+.why{font-size:13px;color:var(--text-3);text-align:center;min-height:18px}
+.heard{font-size:14px;color:var(--text-2);text-align:center;min-height:20px}
+.timing{display:flex;flex-wrap:wrap;justify-content:center;gap:6px}
+.timing span{font-size:12px;color:#c9c5e8;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);border-radius:999px;padding:3px 10px;font-variant-numeric:tabular-nums}
+.timing b{color:#fff;font-weight:600}
+.end.is-start{background:#2f9e62;box-shadow:0 10px 30px -10px rgba(47,158,98,.6)}
+.end.is-start:hover{background:#278a55}
+</style>
+</head>
+<body>
+<main class="call" id="call">
+  <div class="call__glow" id="glow" aria-hidden="true"></div>
+
+  <header class="top">
+    <button type="button" class="gear" id="gear" aria-label="الإعدادات" aria-expanded="false" aria-controls="sheet">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+    </button>
+    <div class="chip">
+      <span class="chip__icon" aria-hidden="true"><i></i><i></i><span class="chip__live" id="live"></span></span>
+      <span class="chip__name" id="agentName">مساعدك</span>
+      <span class="chip__sep" aria-hidden="true"></span>
+      <span class="chip__timer" id="timer" aria-label="مدة المكالمة">٠٠:٠٠</span>
+    </div>
+  </header>
+
+  <aside class="sheet" id="sheet" hidden>
+    <h2>الإعدادات</h2>
+    <label class="field">المحادثة<select id="scen"></select></label>
+    <label class="field">الصوت<select id="eng">
+      <option value="live">صوت Gemini المباشر (الأسرع)</option>
+      <option value="eleven" id="elevenOpt" disabled>ElevenLabs (يحتاج مفتاح)</option>
+      <option value="edge">صوت سعودي (إنترنت، أبطأ)</option>
+      <option value="say">ماجد (بدون إنترنت)</option></select></label>
+    <label class="field">عقل الوكيل<select id="model"></select></label>
+    <label class="field">المايك<select id="mic">
+      <option value="auto">تلقائي (يكتشف السماعة)</option><option value="hp">سماعة رأس</option><option value="spk">سماعات اللابتوب</option></select></label>
+    <label class="field">عنوان الخادم<input id="server" value="ws://127.0.0.1:8771" spellcheck="false"></label>
+    <div class="sheet__note" id="sheetNote">التغييرات تنطبق على المكالمة الجاية.</div>
+    <div class="sheet__row"><button type="button" class="btn btn--ok" id="saveBtn">حفظ</button><button type="button" class="btn btn--ghost" id="closeBtn">إغلاق</button></div>
+  </aside>
+
+  <section class="center">
+    <div class="greeting">
+      <h1 id="hello">أهلاً بك، أنا أسمعك</h1>
+      <p id="sub">اضغط «ابدأ المكالمة» ومعك سماعة رأس</p>
+    </div>
+
+    <div class="agent" id="agent" data-mode="listen" role="img" aria-label="المساعد">
+      <div class="agent__halo"></div>
+      <div class="agent__pose">
+        <div class="agent__motion">
+          <div class="agent__shadow"></div>
+          <div class="agent__body"></div>
+          <div class="agent__brows"><i></i><i></i></div>
+          <div class="agent__eyes"><span class="eye"><i></i></span><span class="bridge"></span><span class="eye"><i></i></span></div>
+          <div class="agent__cheeks"><i></i><i></i></div>
+          <div class="agent__mouthbox"><span class="mouth"></span></div>
+        </div>
+      </div>
+    </div>
+
+    <div style="display:flex;flex-direction:column;align-items:center;gap:6px">
+      <div class="wave" id="wave" aria-hidden="true"></div>
+      <span class="wave__label" id="waveLabel"></span>
+    </div>
+
+    <div class="decision">
+      <div class="status" id="status" role="status" aria-live="polite">
+        <span class="status__dot" id="statusDot" aria-hidden="true"></span>
+        <span id="statusText">جاهز</span>
+      </div>
+      <div class="why" id="why"></div>
+      <div class="heard" id="heard"></div>
+      <div class="timing" id="timing"></div>
+    </div>
+  </section>
+
+  <footer class="controls">
+    <div class="ctl">
+      <button type="button" class="round" id="muteBtn" aria-pressed="false" aria-label="كتم الميكروفون">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/><path class="slash" d="M4 4l16 16"/></svg>
+      </button>
+      <span id="muteCaption">كتم</span>
+    </div>
+
+    <button type="button" class="end is-start" id="endBtn">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" id="endIcon"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
+      <span id="endLabel">ابدأ المكالمة</span>
+    </button>
+
+    <div class="ctl">
+      <button type="button" class="round" id="speakerBtn" aria-pressed="false" aria-label="مكبّر الصوت">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/></svg>
+      </button>
+      <span>السمّاعة</span>
+    </div>
+  </footer>
+</main>
+
+<script>
+/* ============ واجهة المكالمة (نفس تصميمك، بدون تعديل في السلوك) ============ */
+class VoiceCallUI {
+  constructor(root) {
+    this.$ = id => root.querySelector('#' + id);
+    this.agent = this.$('agent');
+    this.root = root;
+    this.wave = this.$('wave');
+    this.glow = this.$('glow');
+    this.listeners = {};
+
+    this.turn = 'customer';   // customer | ready | agent
+    this.tone = 'normal';     // normal | upset | noise | think
+    this.heated = false;      // كان العميل منزعج في هالدور → المساعد يرد بهدوء
+    this.muted = false;
+    this.pendingAgent = null; // رد المساعد المؤجّل لين يخلّص العميل
+    this.noticeTimer = null;
+    this.externalLevel = null;
+    this.externalAt = 0;
+
+    // الموجة
+    this.shape = [.35, .55, .7, .5, .85, 1, .8, 1, .9, .6, .75, .5, .35];
+    this.bars = this.shape.map(() => {
+      const s = document.createElement('span');
+      this.wave.appendChild(s);
+      return s;
+    });
+    this.phases = this.shape.map((_, i) => i * 0.9 + Math.random());
+
+    // الأزرار
+    this.$('muteBtn').addEventListener('click', () => this.setMuted(!this.muted));
+    this.$('speakerBtn').addEventListener('click', e => {
+      const on = e.currentTarget.getAttribute('aria-pressed') !== 'true';
+      e.currentTarget.setAttribute('aria-pressed', String(on));
+      this.emit('speaker', on);
+    });
+    this.$('endBtn').addEventListener('click', () => this.emit('end'));
+
+    // المؤقت
+    this.started = Date.now();
+    setInterval(() => this.tickTimer(), 1000);
+    this.tickTimer();
+
+    this.render();
+    requestAnimationFrame(t => this.frame(t));
+  }
+
+  /* ---------- API ---------- */
+  customerTalking(tone = this.tone) {
+    this.turn = 'customer';
+    this.setTone(tone);
+  }
+  customerThinking() { this.customerTalking('think'); }
+  setTone(tone) {
+    const prev = this.tone;
+    this.tone = tone;
+    if (tone === 'upset') this.heated = true;
+    // أول ما تعلى النبرة: لحظة "يلاحظ" (يثبت) قبل ما يهدأ، عشان ما يقفز فجأة
+    clearTimeout(this.noticeTimer);
+    this.noticing = false;
+    if (tone === 'upset' && prev !== 'upset' && this.turn === 'customer') {
+      this.noticing = true;
+      this.noticeTimer = setTimeout(() => { this.noticing = false; this.render(); }, 1500);
+    }
+    // الرجوع للطبيعي أبطأ من الدخول
+    this.returning = (prev !== 'normal' && tone === 'normal');
+    this.render();
+  }
+  customerDone() {
+    this.turn = 'ready';
+    this.render();
+    if (this.pendingAgent) {
+      const text = this.pendingAgent.text;
+      this.pendingAgent = null;
+      setTimeout(() => this.agentTalking(text), 500);
+    }
+  }
+  agentTalking(text) {
+    // قاعدة: ما يقاطع العميل، حتى لو كان ساكت يفكّر
+    if (this.turn === 'customer') { this.pendingAgent = { text }; return false; }
+    this.turn = 'agent';
+    this.agentText = text || null;
+    this.render();
+    return true;
+  }
+  agentDone() {
+    this.turn = 'customer';
+    this.agentText = null;
+    const wasHeated = this.heated || this.tone !== 'normal';
+    this.tone = 'normal';
+    this.heated = false;
+    this.returning = wasHeated;
+    this.render();
+  }
+  setMuted(m) {
+    this.muted = m;
+    const b = this.$('muteBtn');
+    b.setAttribute('aria-pressed', String(m));
+    b.setAttribute('aria-label', m ? 'إلغاء كتم الميكروفون' : 'كتم الميكروفون');
+    this.$('muteCaption').textContent = m ? 'مكتوم' : 'كتم';
+    this.emit('mute', m);
+    this.render();
+  }
+  setLevel(v) { this.externalLevel = Math.max(0, Math.min(1, v)); this.externalAt = performance.now(); }
+  attachStream(stream) {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const an = ctx.createAnalyser();
+    an.fftSize = 512;
+    ctx.createMediaStreamSource(stream).connect(an);
+    const buf = new Uint8Array(an.fftSize);
+    const loop = () => {
+      an.getByteTimeDomainData(buf);
+      let sum = 0;
+      for (let i = 0; i < buf.length; i++) { const x = (buf[i] - 128) / 128; sum += x * x; }
+      this.setLevel(Math.min(1, Math.sqrt(sum / buf.length) * 4));
+      requestAnimationFrame(loop);
+    };
+    loop();
+  }
+  on(evt, fn) { (this.listeners[evt] ||= []).push(fn); return this; }
+  emit(evt, ...a) { (this.listeners[evt] || []).forEach(fn => fn(...a)); }
+
+  /* ---------- الحالة → الشكل ---------- */
+  view() {
+    const T = { angry: 'var(--tone-angry)', noise: 'var(--tone-noise)', follow: 'var(--tone-follow)', think: 'var(--tone-think)', muted: 'var(--tone-muted)' };
+    if (this.muted) return { mode: 'listen', wave: T.muted, waveLabel: 'الميكروفون مكتوم', status: 'الميكروفون مكتوم', pace: 1, glow: .14, sim: 'flat' };
+
+    if (this.turn === 'ready') return { mode: 'listen', wave: T.follow, waveLabel: '', status: 'تمام…', pace: .7, glow: .18, sim: 'idle',
+      gentle: this.heated, close: this.tone === 'noise' };
+
+    if (this.turn === 'agent') {
+      const upset = this.heated;
+      return { mode: 'speak', wave: T.follow, waveLabel: 'المساعد يتكلم',
+        status: this.agentText || (upset ? 'أفهم إن الموضوع مزعج… خلني أشوف لك' : 'تمام، فهمت عليك…'),
+        pace: upset ? .65 : 1, glow: upset ? .16 : .2, sim: upset ? 'agentSoft' : 'agent',
+        gentle: upset, close: this.tone === 'noise' };
+    }
+
+    // دور العميل
+    if (this.tone === 'upset') {
+      if (this.noticing) return { mode: 'notice', wave: T.angry, waveLabel: 'نبرة العميل تعلى', status: 'أسمعك…', pace: 1, glow: .22, sim: 'rising' };
+      return { mode: 'calm', wave: T.angry, waveLabel: 'العميل منزعج', status: 'أفهمك، خذ راحتك وأنا معك', pace: .55, glow: .12, sim: 'angry' };
+    }
+    if (this.tone === 'think') return { mode: 'wait', wave: T.think, waveLabel: 'العميل يفكّر', status: 'خذ وقتك، أنا هنا', pace: .5, glow: .16, sim: 'think',
+      gentle: this.heated };
+    if (this.tone === 'noise') return { mode: 'lean', wave: T.noise, waveLabel: 'في ضوضاء حول العميل', status: 'أحاول أسمعك… كمّل', pace: 1, glow: .26, sim: 'noise' };
+    return { mode: 'listen', wave: T.follow, waveLabel: 'العميل يتكلم', status: 'أسمعك… كمّل', pace: 1, glow: .2, sim: 'normal' };
+  }
+
+  render() {
+    const v = this.view();
+    this.v = v;
+    const a = this.agent;
+    a.dataset.mode = v.mode;
+    a.classList.toggle('is-gentle', !!v.gentle);
+    a.classList.toggle('is-close', !!v.close);
+    a.style.setProperty('--pace', v.pace);
+    // الرجوع للطبيعي يكون أبطأ من الدخول
+    a.style.setProperty('--pose-t', this.returning ? '1.6s' : '.8s');
+    this.returning = false;
+
+    this.root.style.setProperty('--wave', v.wave);
+    this.$('waveLabel').textContent = v.waveLabel;
+    this.$('statusText').textContent = v.status;
+    this.glow.style.setProperty('--glow', v.glow);
+  }
+
+  /* ---------- الموجة: تُرسم كل فريم ---------- */
+  simLevel(t) {
+    const s = t / 1000;
+    switch (this.v.sim) {
+      case 'flat': return 0;
+      case 'think': return .14 + .06 * Math.sin(s * 1.2);
+      case 'idle': return .08;
+      case 'rising': return .55 + .2 * Math.abs(Math.sin(s * 3));
+      case 'angry': return .75 + .25 * Math.abs(Math.sin(s * 4.3)) * (0.7 + 0.3 * Math.random());
+      case 'noise': return .5 + .35 * Math.random();
+      case 'agent': return .45 + .15 * Math.sin(s * 2.4);
+      case 'agentSoft': return .32 + .1 * Math.sin(s * 1.6);
+      default: return .5 + .18 * Math.sin(s * 3);
+    }
+  }
+  frame(t) {
+    const useExternal = this.externalLevel !== null && performance.now() - this.externalAt < 250
+      && this.turn === 'customer' && !this.muted;
+    const level = useExternal ? this.externalLevel : this.simLevel(t);
+    const s = t / 1000;
+    const speed = this.v.sim === 'noise' ? 9 : this.v.sim === 'angry' ? 7 : this.v.sim === 'think' ? 1.5 : 4;
+    this.bars.forEach((b, i) => {
+      const osc = .55 + .45 * Math.sin(s * speed + this.phases[i]);
+      const y = Math.max(.08, level * this.shape[i] * osc);
+      b.style.transform = `scaleY(${y.toFixed(3)})`;
+    });
+    requestAnimationFrame(tt => this.frame(tt));
+  }
+
+  tickTimer() {
+    const sec = Math.floor((Date.now() - this.started) / 1000);
+    const ar = n => String(n).padStart(2, '0').replace(/\d/g, d => '٠١٢٣٤٥٦٧٨٩'[d]);
+    this.$('timer').textContent = ar(Math.floor(sec / 60)) + ':' + ar(sec % 60);
+  }
+}
+
+
+const ui = new VoiceCallUI(document.getElementById('call'));
+window.voiceUI = ui;
+
+/* ============ الربط بالخادم الحقيقي (نفس محرك العرض، مع إصلاح «قاطعته وكمّل») ============ */
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+const arNum = n => String(n).replace(/\d/g, d => '٠١٢٣٤٥٦٧٨٩'[d]);
+const SETTINGS_KEY = 'sarj-call-settings';
+function loadSettings() { try { return JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}'); } catch (e) { return {}; } }
+function saveSettings(s) { try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(s)); } catch (e) {} }
+const settings = Object.assign({scen: '', eng: 'live', model: '', mic: 'auto', server: 'ws://127.0.0.1:8771'}, loadSettings());
+function httpBase() { try { const u = new URL(settings.server); return `http://${u.hostname}:${location.port || 8790}`; } catch (e) { return ''; } }
+
+// ---- الإعدادات ----
+const sheet = $('#sheet'), gear = $('#gear');
+function openSheet(on) { sheet.hidden = !on; gear.setAttribute('aria-expanded', String(on)); }
+gear.onclick = () => openSheet(sheet.hidden);
+$('#closeBtn').onclick = () => openSheet(false);
+$('#saveBtn').onclick = () => {
+  for (const k of ['scen', 'eng', 'model', 'mic', 'server']) settings[k] = $('#' + k).value.trim();
+  saveSettings(settings); $('#speakerBtn').setAttribute('aria-pressed', String(settings.mic === 'spk'));
+  showScenario(); openSheet(false);
+};
+function fillSettings() { for (const k of ['scen', 'eng', 'model', 'mic', 'server']) if (settings[k]) $('#' + k).value = settings[k]; }
+let scenTitles = {};
+function showScenario() {
+  const t = scenTitles[settings.scen || $('#scen').value];
+  $('#sub').textContent = callOn ? (t || '') : (t ? `${t} · اضغط «ابدأ المكالمة»` : 'اضغط «ابدأ المكالمة» ومعك سماعة رأس');
+}
+fetch('/scenarios').then(r => r.json()).then(d => {
+  scenTitles = d.scenarios || {};
+  for (const [k, v] of Object.entries(scenTitles)) $('#scen').insertAdjacentHTML('beforeend', `<option value="${k}">${esc(v)}</option>`);
+  const names = {'gemini': 'Gemini (سحابي، الافتراضي)', 'local-url': 'API أو LM Studio', 'gemma4-26b': 'Gemma 4 26B (محلي)', 'gemma4-e4b': 'Gemma 4 E4B (خفيف)',
+                 'gemma-12b': 'Gemma 3 12B', 'qwen3-14b': 'Qwen3 14B', 'claude-opus': 'Claude Opus 5.5 (سحابي، أبطأ)', 'claude-haiku': 'Claude Haiku 5.5 (سحابي)'};
+  if (d.voices && d.voices.eleven) { $('#elevenOpt').disabled = false; $('#elevenOpt').textContent = 'ElevenLabs'; }
+  for (const [k, ok] of Object.entries(d.models || {})) if (ok) $('#model').insertAdjacentHTML('beforeend', `<option value="${k}">${names[k] || k}</option>`);
+  fillSettings(); showScenario();
+}).catch(() => { $('#sheetNote').textContent = 'ما قدرت أوصل للخادم: شغّل «جرّب نموذج سرج» أو عدّل العنوان.'; });
+$('#speakerBtn').setAttribute('aria-pressed', String(settings.mic === 'spk'));
+ui.on('speaker', on => { settings.mic = on ? 'spk' : 'auto'; saveSettings(settings); $('#mic').value = settings.mic; });
+
+// ---- القرار والتوقيت (نفس الأرقام اللي كنا نجربها بالعرض) ----
+const st = {stops: [], replies: [], kept: 0, resumes: 0, parts: null};
+const avg = a => a.length ? Math.round(a.reduce((x, y) => x + y, 0) / a.length) : null;
+// a decision (stop / kept / vetoed, with its time) stays in the pill for a few seconds; the design's own text comes back after
+let decision = {html: '', kind: '', until: 0};
+const _render = ui.render.bind(ui);
+ui.render = () => {
+  _render();
+  const s = $('#status'), live = Date.now() < decision.until;
+  s.classList.remove('is-stop', 'is-keep', 'is-veto');
+  if (live) { if (decision.kind) s.classList.add('is-' + decision.kind); $('#statusText').innerHTML = decision.html; }
+};
+setInterval(() => { if (decision.until && Date.now() >= decision.until) { decision.until = 0; ui.render(); } }, 500);
+function decide(kind, text, why) {
+  decision = {html: text, kind, until: Date.now() + (kind ? 6000 : 2500)};
+  $('#why').textContent = why || '';
+  ui.render();
+}
+function renderTiming() {
+  const p = st.parts || {}, f = (v, t) => v != null ? `<span>${t} <b>${arNum(v)}</b> ms</span>` : '';
+  $('#timing').innerHTML = [
+    st.stops.length ? `<span>متوسط السكوت <b>${arNum(avg(st.stops))}</b> ms (${arNum(st.stops.length)})</span>` : '',
+    st.replies.length ? `<span>متوسط الرد <b>${arNum(avg(st.replies))}</b> ms</span>` : '',
+    f(p.total_ms, 'آخر رد: الكل'), f(p.eot_ms, 'انتظار نهاية الكلام'), f(p.asr_ms, 'قراءة الكلام'), f(p.brain_first_ms, 'العقل'), f(p.head_start_ms, 'بدأ مبكر'),
+    st.kept ? `<span>تأييد كمّل فوقه <b>${arNum(st.kept)}</b></span>` : '', st.resumes ? `<span>سكت ورجع <b>${arNum(st.resumes)}</b></span>` : ''
+  ].join('');
+}
+function toneFromWhy(why) {
+  const w = why || '';
+  if (/thinking|تفكير|weighing|hesitation|filler/i.test(w)) return 'think';
+  if (/not the caller|too quiet|someone else|side talk|echo|صدى|ضجيج/i.test(w)) return 'noise';
+  return 'normal';
+}
+const WHY_AR = [[/floor-bid word/, 'كلمة طلب كلام'], [/content words?/, 'كلام جديد'], [/answers the agent's question/, 'جواب على سؤال الوكيل'],
+  [/model is sure/, 'النموذج متأكد'], [/the meaning asks for the floor/, 'المعنى يطلب الكلام'], [/sustained loud speech/, 'كلام عالي ومستمر'],
+  [/«خلاص\/طيب» with more/, '«طيب/خلاص» وبعدها كلام'], [/acknowledgement|filler/, 'تأييد'], [/thinking aloud/, 'يفكر بصوت عالي'],
+  [/calls someone else/, 'ينادي أحد بالبيت'], [/lone question word/, 'كلمة سؤال لحالها'], [/not the caller's voice/, 'مو صوت المتصل'],
+  [/too quiet/, 'صوت بعيد (تلفزيون/خلفية)'], [/backchannel or blessing/, 'تأييد أو دعاء'], [/question/, 'سؤال']];
+function whyAr(w) { if (!w) return ''; for (const [re, t] of WHY_AR) if (re.test(w)) return t; return w; }
+
+// ---- محرك الصوت (منسوخ من صفحة العرض: يشغّل الوكيل، يسجّل المايك، ٢٠ ms لكل إطار) ----
+const worklet = `
+class P extends AudioWorkletProcessor {
+  constructor(){ super(); this.q = []; this.cur = null; this.pos = 0; this.gain = 1; this.fading = false; this.muted = false;
+    this.ratio = sampleRate / 16000; this.bA = []; this.bM = []; this.p = 0; this.fa = []; this.fc = [];
+    this.port.onmessage = e => { const d = e.data;
+      if (d.start !== undefined) this.muted = false;
+      if (d.enqueue && !this.muted) this.q.push({id: d.id, buf: d.enqueue});
+      if (d.stop) { this.q = []; this.muted = true; if (this.cur) this.fading = true; } }; }
+  process(inputs, outputs){
+    const mic = inputs[0] && inputs[0][0] ? inputs[0][0] : null; const out = outputs[0][0];
+    for (let i = 0; i < out.length; i++) {
+      if (!this.cur && this.q.length && !this.fading && !this.muted) { this.cur = this.q.shift(); this.pos = 0; this.gain = 1; }
+      let a = 0;
+      if (this.cur) {
+        a = this.cur.buf[this.pos++] * this.gain;
+        if (this.fading) { this.gain = Math.max(0, this.gain - 1/(0.06*sampleRate));
+          if (this.gain === 0) { this.port.postMessage({stopped: {id: this.cur.id, played: Math.round(this.pos / this.ratio)}}); this.cur = null; this.q = []; this.fading = false; } }
+        if (this.cur && this.pos >= this.cur.buf.length) { const id = this.cur.id; this.cur = null;
+          this.port.postMessage({chunkEnded: id}); if (!this.q.length) this.port.postMessage({idle: true}); }
+      }
+      out[i] = a; this.bA.push(a); this.bM.push(mic ? mic[i] : 0);
+    }
+    const r = this.ratio, w = Math.max(1, Math.round(r));
+    while (this.p + w < this.bA.length) {
+      const k = Math.floor(this.p); let sa = 0, sm = 0;
+      for (let j = 0; j < w; j++) { sa += this.bA[k + j]; sm += this.bM[k + j]; }
+      this.fa.push(sa / w); this.fc.push(sm / w); this.p += r;
+      if (this.fa.length === 320) {
+        const b = new Int16Array(640);
+        for (let q = 0; q < 320; q++) { b[2*q] = Math.max(-1, Math.min(1, this.fa[q])) * 32767; b[2*q+1] = Math.max(-1, Math.min(1, this.fc[q])) * 32767; }
+        this.port.postMessage({frame: b.buffer}, [b.buffer]); this.fa = []; this.fc = [];
+      }
+    }
+    const drop = Math.floor(this.p); if (drop > 0) { this.bA.splice(0, drop); this.bM.splice(0, drop); this.p -= drop; }
+    return true;
+  }
+}
+registerProcessor('p', P);`;
+let stopEpoch = -1, playEpoch = null;
+function playable(m) {
+  const ep = m.epoch ?? 0;
+  if (ep < stopEpoch) return false;
+  if (ep !== playEpoch) { node.port.postMessage({start: ep}); playEpoch = ep; }
+  return true;
+}
+let ctx, node, ws, srcNode = null, micSettings = null, levelProbe = null, micUsed = 'spk', callOn = false, agentText = '';
+async function chosenMicMode() {
+  const pick = settings.mic || 'auto';
+  if (pick !== 'auto') return pick;
+  try {
+    const outs = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'audiooutput');
+    const out = outs.find(d => d.deviceId === 'default') || outs[0];
+    const label = out ? out.label : '';
+    return /airpods|headphone|headset|earphone|buds|beats/i.test(label) && !/speaker|built-in/i.test(label) ? 'hp' : 'spk';
+  } catch (e) { return 'spk'; }
+}
+function closeMic() { if (!srcNode) return; srcNode.mediaStream.getTracks().forEach(t => t.stop()); srcNode.disconnect(); srcNode = null; }
+async function openMic() {
+  closeMic(); micUsed = await chosenMicMode();
+  const speakers = micUsed === 'spk';
+  const stream = await navigator.mediaDevices.getUserMedia({audio: {echoCancellation: speakers, noiseSuppression: false, autoGainControl: false, channelCount: 1}});
+  micSettings = stream.getAudioTracks()[0].getSettings();
+  srcNode = ctx.createMediaStreamSource(stream); srcNode.connect(node);
+}
+let upPrev = 0, upPos = 0;
+function upsample(b64) {
+  const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+  const s = new Int16Array(bytes.buffer), step = 24000 / ctx.sampleRate, out = [];
+  let pos = upPos;
+  while (pos < s.length) { const i = Math.floor(pos), a = i === 0 ? upPrev : s[i - 1]; out.push((a + (s[i] - a) * (pos - i)) / 32768); pos += step; }
+  upPos = pos - s.length; upPrev = s[s.length - 1];
+  return Float32Array.from(out);
+}
+function frameLevel(buffer) {             // the caller channel of a 20 ms frame -> 0..1 for the wave
+  const s = new Int16Array(buffer); let sum = 0;
+  for (let i = 1; i < s.length; i += 2) sum += s[i] * s[i];
+  return Math.min(1, Math.sqrt(sum / (s.length / 2)) / 32768 * 6);
+}
+async function ensureAudio() {
+  if (!ctx) {
+    ctx = new AudioContext();
+    await ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([worklet], {type: 'application/javascript'})));
+    node = new AudioWorkletNode(ctx, 'p', {numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1]});
+    node.connect(ctx.destination);
+    node.port.onmessage = e => {
+      const d = e.data;
+      if (d.frame) {
+        if (ui.muted) { const s = new Int16Array(d.frame); for (let i = 1; i < s.length; i += 2) s[i] = 0; }   // mute = silence on the caller channel
+        if (levelProbe) levelProbe(d.frame);
+        if (ui.turn === 'customer' && !ui.muted) ui.setLevel(frameLevel(d.frame));
+      }
+      if (!ws || ws.readyState !== 1) return;
+      if (d.frame) ws.send(d.frame);
+      if (d.chunkEnded !== undefined) ws.send(JSON.stringify({type: 'played', id: d.chunkEnded}));
+      if (d.idle) ws.send(JSON.stringify({type: 'idle'}));
+      if (d.stopped) ws.send(JSON.stringify({type: 'stopped', id: d.stopped.id, played: d.stopped.played}));
+    };
+  }
+  await openMic();
+}
+function micLevelCheck() {
+  return new Promise(resolve => {
+    const levels = []; let peak = 0;
+    levelProbe = buffer => { const s = new Int16Array(buffer); let sum = 0;
+      for (let i = 1; i < s.length; i += 2) { sum += s[i] * s[i]; peak = Math.max(peak, Math.abs(s[i])); }
+      levels.push(10 * Math.log10(sum / (s.length / 2) / (32768 * 32768) + 1e-12)); };
+    decide('', 'فحص المايك: قل «هلا، معك …» واسمك', '');
+    setTimeout(() => {
+      levelProbe = null; levels.sort((a, b) => a - b);
+      const p95 = levels.length ? levels[Math.floor(levels.length * 0.95)] : -120;
+      $('#why').textContent = p95 < -40 ? 'صوتك واطي: قرّب المايك' : peak >= 32000 ? 'الصوت يتقطّع: بعّد المايك شوي' : `المايك ممتاز (${micUsed === 'hp' ? 'سماعة رأس' : 'سماعات اللابتوب'})`;
+      resolve({p95_dbfs: Math.round(p95), clipping: peak >= 32000});
+    }, 3000);
+  });
+}
+
+// ---- بدء وإنهاء المكالمة ----
+function setCallButton(on) {
+  callOn = on; const b = $('#endBtn');
+  b.classList.toggle('is-start', !on); $('#endLabel').textContent = on ? 'إنهاء المكالمة' : 'ابدأ المكالمة';
+  $('#endIcon').style.transform = on ? 'rotate(135deg)' : 'none';
+  $('#live').style.background = on ? '#5fd08f' : '#8f89c4';
+}
+setCallButton(false);
+async function startCall() {
+  try { await ensureAudio(); await ctx.resume(); } catch (e) { decide('veto', 'المتصفح ما سمح بالمايك', ''); return; }
+  setCallButton(true); openSheet(false);
+  st.stops = []; st.replies = []; st.kept = 0; st.resumes = 0; st.parts = null; renderTiming(); $('#heard').textContent = '';
+  ui.started = Date.now(); ui.tickTimer();
+  node.port.postMessage({stop: true}); stopEpoch = -1; playEpoch = null;
+  const level = await micLevelCheck();
+  if (ws) { try { ws.onmessage = null; ws.close(); } catch (e) {} }
+  ws = new WebSocket(settings.server || 'ws://127.0.0.1:8771');
+  ws.onerror = () => decide('veto', 'ما قدرت أتصل بالخادم', settings.server);
+  ws.onopen = () => ws.send(JSON.stringify({type: 'convo_start', scenario: settings.scen || $('#scen').value, engine: settings.eng || $('#eng').value,
+                                           model: settings.model || $('#model').value, mic: {mode: micUsed, picked: settings.mic, settings: micSettings, level}}));
+  ws.onmessage = onMessage;
+  showScenario();
+}
+function endCall() {
+  closeMic(); if (node) node.port.postMessage({stop: true});
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify({type: 'convo_end'}));
+  setCallButton(false); ui.agentDone(); decide('', 'انتهت المكالمة', ''); showScenario();
+}
+ui.on('end', () => callOn ? endCall() : startCall());
+window.addEventListener('pagehide', closeMic);
+
+// ---- رسائل الخادم → شكل المساعد + مكان القرار ----
+function agentSpeaks(text) { ui.turn = 'ready'; ui.agentTalking(text); }
+async function onMessage(e) {
+  const m = JSON.parse(e.data);
+  if (m.type === 'status') {
+    if (m.state === 'loading') decide('', 'يجهّز العقل…', '');
+    if (m.state === 'ready') { decide('', 'المكالمة بدأت', m.model ? `العقل: ${m.model}` : ''); }
+    if (m.state === 'speaking') { agentSpeaks(agentText || undefined); if (!$('#status').classList.contains('is-stop')) decide('', 'المساعد يتكلم', ''); }
+    if (m.state === 'listening') { ui.agentDone(); agentText = ''; }
+    if (m.state === 'thinking') { ui.customerDone(); decide('', 'يفكر بالرد…', ''); }
+    if (m.state === 'ended') endCall();
+  }
+  if (m.type === 'say') {
+    if ((m.epoch ?? 0) < stopEpoch) return;
+    const bytes = Uint8Array.from(atob(m.wav), c => c.charCodeAt(0));
+    const buf = await ctx.decodeAudioData(bytes.buffer);
+    if (!playable(m)) return;
+    node.port.postMessage({enqueue: buf.getChannelData(0).slice(), id: m.id});
+    agentText = ((agentText ? agentText + ' ' : '') + (m.text || '')).slice(-140); agentSpeaks(agentText);
+  }
+  if (m.type === 'pcm') {
+    if (!playable(m)) return;
+    node.port.postMessage({enqueue: upsample(m.pcm), id: m.id});
+    if (m.text) { agentText = (agentText + m.text).slice(-140); agentSpeaks(agentText); }
+  }
+  if (m.type === 'stop') {
+    stopEpoch = m.epoch ?? stopEpoch; playEpoch = null;
+    node.port.postMessage({stop: true});
+    st.stops.push(m.latency); renderTiming();
+    ui.customerTalking(toneFromWhy(m.why) === 'noise' ? 'normal' : toneFromWhy(m.why));
+    decide('stop', `✋ سكت عشان يسمعك · <span class="status__ms">${arNum(m.latency)} ms</span>`, `السبب: ${whyAr(m.why)}`);
+  }
+  if (m.type === 'stop_vetoed') decide('veto', 'ما وقفت', m.why || 'صدى أو ضجيج');
+  if (m.type === 'hearing') {
+    if (m.text) $('#heard').textContent = `يسمع: «${m.text}»`;
+    const tone = toneFromWhy(m.why);
+    if (m.text && ui.turn !== 'agent') ui.customerTalking(tone);
+    else if (m.text && tone !== 'normal') ui.setTone(tone);
+    if (m.why && m.why.startsWith('كان تأييد')) { st.resumes++; renderTiming(); decide('keep', 'كان تأييد: رجع يكمّل', ''); }
+  }
+  if (m.type === 'chat') {
+    if (m.note && m.note.startsWith('تأييد')) { st.kept++; renderTiming(); decide('keep', 'سمعك وكمّل', `«${m.text}» = ${m.note === 'تأييد — يكمّل' ? 'تأييد، رجع يكمّل' : 'تأييد'}`); }
+    else if (m.role === 'caller' && m.text) $('#heard').textContent = `قلت: «${m.text}»`;
+  }
+  if (m.type === 'stat' && m.kind === 'reply') { st.replies.push(m.ms); if (m.parts) st.parts = m.parts; renderTiming(); }
+}
+</script>
+</body>
+</html>

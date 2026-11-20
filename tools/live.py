@@ -132,6 +132,8 @@ class H(BaseHTTPRequestHandler):
             return self._send((KIT / "tools" / "live.html").read_bytes(), "text/html; charset=utf-8")
         if u.path == "/demo":
             return self._send((KIT / "demo" / "index.html").read_bytes(), "text/html; charset=utf-8")
+        if u.path == "/call":                     # the call-style demo page (design by the team)
+            return self._send((KIT / "demo" / "call.html").read_bytes(), "text/html; charset=utf-8")
         if u.path == "/preflight":
             return self._send(json.dumps(preflight(), ensure_ascii=False).encode(), "application/json")
         if u.path == "/results":
