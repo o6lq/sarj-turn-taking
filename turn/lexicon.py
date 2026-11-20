@@ -15,12 +15,19 @@ _DIAC = re.compile(r"[ؐ-ًؚ-ٰٟۖ-ۭـ]")
 _PUNCT = re.compile(r"[^\w\s؀-ۿ]|[_\d٠-٩]|[،؛؟]")
 
 
+# "what's-it-called" while searching for a word is hesitation, not a question to the agent (T1c). The question word
+# inside it is folded into one THINK word. Hijazi «إيش اسمه / ايش اسمو», Gulf «شنو اسمه / شو اسمه / شسمه»,
+# Najdi «وش اسمه / وشسمه», «ويش اسمه». «اسمك» (your name) is a real question and is left alone.
+_WHATSIT = re.compile(r"(?<!\S)(?:ا?يش|ويش|وش|شنو|شو)\s?(?:اسمه|اسمو|اسمها|اسمهم)(?!\S)")
+
+
 def norm(t: str) -> str:
     t = _DIAC.sub("", t)
     t = re.sub("[إأآٱ]", "ا", t)
     t = t.replace("ى", "ي").replace("ة", "ه").replace("ؤ", "و").replace("ئ", "ي")
     t = _PUNCT.sub(" ", t)
-    return re.sub(r"\s+", " ", t).strip()
+    t = re.sub(r"\s+", " ", t).strip()
+    return _WHATSIT.sub("شسمه", t) if t else t
 
 
 def squeeze(w: str) -> str:
@@ -39,6 +46,7 @@ FILLER = {norm(w) for w in "امم اممم ااا اا ام يعني ممم ا�
 BID = {norm(w) for w in """
 لا لحظه لحظة دقيقه ثانيه ثواني استنى استني اصبر انتظر انتظري بس اسمع اسمعي اسمعني شوف شوفي
 ممكن ابي ابغى ابغي ابا ودي اريد بدي عندي سؤال استفسار كم وش ايش شنو شو ليش ليه متى وين كيف مين منو اي
+شلون شقد شكثر فين امتى إمتى استنا
 مو مب مش ما مافي ماني مابي مابغى
 سوري عفوا لوسمحت لو سمحت سمحت يااخي اخي اخوي خويي
 غلط خطا ماطلبت
@@ -49,7 +57,7 @@ BID = {norm(w) for w in """
 """.split()} - {"اي"}
 WEAK_BID = {norm(w) for w in "مش ما مو مب".split()}
 # «خلاص» and «طيب» are the brief's ambiguous pair: repeated or followed by more words = floor bid
-AMBIG = {norm(w) for w in "خلاص طيب".split()}
+AMBIG = {norm(w) for w in "خلاص طيب انزين إنزين انزينه".split()}   # T1a: «إنزين» = Gulf «طيب» (Bahraini, Kuwaiti, Omani, Emirati)
 
 # Whisper sometimes "hears" these in noise or silence: never trust them
 HALLUCINATIONS = [norm(p) for p in [
@@ -276,14 +284,14 @@ def option_answer(caller_text: str, options: set[str]) -> dict:
 # ---------------------------------------------------------------- F4: is a question/command word meant for the agent?
 # question, call and command words people also say to each other or to themselves («وين حطيتي…», «شوف مين…»,
 # «وش كان…؟»): they open a turn only when the words are about the call or addressed to the agent
-CUE = {norm(w) for w in "وش ايش شنو شو ليش ليه متى وين كيف مين منو كم شوف شوفي اسكت اسكتي تعال تعالي".split()}
+CUE = {norm(w) for w in "وش ايش شنو شو ليش ليه متى وين كيف مين منو كم شوف شوفي اسكت اسكتي تعال تعالي شلون شقد شكثر فين امتى".split()}   # T1b: Gulf شلون/شقد/شكثر, Hijazi فين/إمتى
 STRONG_BID = BID - CUE
 # calling someone in the room (not the agent)
 VOCATIVE_WORDS = {norm(w) for w in "ماما يمه يما يمي يبه يبا يبي بابا عيال ولد بنت يولد يابنت ياولد".split()}
 AGENT_TITLES = {norm(w) for w in "اخي اخوي اخت اختي استاذ استاذه أستاذ أستاذة الاخ الاخت الغالي الطيب".split()}
 # thinking aloud to oneself
 THINK_WORDS = {norm(w) for w in """كان كانت ربي يارب يارباه خلني خليني اشوف اشوفه افكر مدري ادري اتذكر نسيت وينه وينها وينهم
-شسمه اسمه اسمها ذاك ذيك حطيت حطيته حطيتها حطيتي حطيتوه وديت وديته وديتها وديتي لقيت لقيته لقيتها""".split()}
+شسمه شسمها وشسمه ايشسمه اسمه اسمها ذاك ذيك حطيت حطيته حطيتها حطيتي حطيتوه وديت وديته وديتها وديتي لقيت لقيته لقيتها""".split()}
 SELF_ANSWER = [norm(p) for p in ["لا خلاص", "ايه صح", "ايوه هو", "ايه هو", "ايه هذا", "اي صح", "ايوه صح", "لا لا خلاص", "تذكرت", "لقيته", "لقيتها"]]
 # words about the call (money, dates, orders, accounts, appointments...) and words addressed to the agent
 DOMAIN = {norm(w) for w in """ريال ريالات المبلغ مبلغ السعر سعر الاسعار الفاتوره فاتوره الرسوم رسوم الطلب طلب طلبي الطلبيه الموعد موعد موعدي
