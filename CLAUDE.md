@@ -1,3 +1,5 @@
+> During the PLAN_V6 run, docs/RUN_PROTOCOL.md is mandatory. Re-read it after every compaction or new session before any other action.
+
 # CLAUDE.md — instructions for Claude Code (Sarj turn-taking project)
 
 Claude Code reads this file automatically whenever the project opens. It says **what we want, in what order, and when a task counts as done**. Read all of it before any change. If anything here conflicts with an explicit request from the user, the user's request wins.
