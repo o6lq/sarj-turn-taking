@@ -7,7 +7,7 @@
 Checks G1 novel-test ≥ base−0.3 · G2 dev-aug ≥ base−0.3 · G3 false stops summed ≤ base · G4 dev ≥ 99.0 and
 0 misses · G5 median stop latency ≤ base+50 ms · G8 cp-mirror (3 renders combined) ≥ base and no category
 drops > 0.05 · G9 per-probe table on cp-stress-test (printed; the targeted probe must improve, controls not drop) ·
-G10 novel-test-2 ≥ 85.0. G6 (pytest, ttbench.ready), G7 (EXPERIMENTS entry) and G11 (3 real-time runs) are
+G10 novel-test-2 ≥ 85.0 · G12 wire integrity. G6 (pytest, ttbench.ready), G7 (EXPERIMENTS entry) and G11 (3 real-time runs) are
 separate. novel-test-2 is an alarm only: never read its sentences.
 """
 from __future__ import annotations
@@ -33,6 +33,18 @@ def summarize(set_name: str, score: dict) -> dict:
     return {"core": score["core"]["core_score"], "R": score["core"]["R"], "S": score["core"]["S"], "n_stop": score["rates"]["n_stop_events"],
             "fs": score["rates"]["false_stops"], "miss": score["rates"]["misses"], "lat": score["latency_ms"]["median"] or 0.0,
             "cats": {c: {"R": v["R"], "S": v["S"]} for c, v in score["categories"].items()}}
+
+
+def wire_check(rd: Path, sc: dict) -> dict:
+    """G12: no decision ignored or unattributed, and as many STOPs on the wire as in the trace."""
+    n_log = 0
+    for line in (rd / "log.jsonl").read_text(encoding="utf-8").splitlines():
+        m = json.loads(line)
+        n_log += m.get("dir") == "rx" and m.get("msg", {}).get("decision") == "STOP"
+    tr = json.loads((rd / "trace.json").read_text(encoding="utf-8")) if (rd / "trace.json").exists() else {}
+    n_tr = sum(1 for t in tr.values() for x in t if x.get("kind") == "STOP")
+    return {"ignored": sc["rates"]["ignored_decisions"], "unattributed": sc["rates"]["unattributed_decisions"],
+            "stop_log": n_log, "stop_trace": n_tr}
 
 
 def combined_mirror(run_of: dict) -> dict:
@@ -69,6 +81,7 @@ def run_all(name: str, overrides: dict, sets: list[str], reuse: set[str] | None 
             sc = simulate(str(KIT / "my_system.py"), d, overrides=overrides, out_dir=rd)
         runs[s] = rd
         out["sets"][s] = summarize(s, sc)
+        out["sets"][s]["wire"] = wire_check(rd, sc)
         x = out["sets"][s]
         print(f"  {s:15s} core {x['core']:5.1f}  R {x['R']:.2f}  S {x['S']:.2f}  FS {x['fs']:3d}  miss {x['miss']}  ({time.time() - t0:.0f}s)", flush=True)
         if s.startswith(("cp-stress", "cp-ht")):
@@ -107,6 +120,9 @@ def gates(new: dict, base: dict) -> list[tuple[str, bool, str]]:
                   f"{base['mirror3']['core']:.2f} → {new['mirror3']['core']:.2f}" + (f"; drops: {', '.join(drops)}" if drops else "")))
     if have("novel-test-2"):
         g.append(("G10 novel-test-2 ≥ 85.0", S["novel-test-2"]["core"] >= 85.0, f"{S['novel-test-2']['core']:.2f}"))
+    bad = [s for s in S if "wire" in S[s] and (S[s]["wire"]["ignored"] or S[s]["wire"]["unattributed"]
+                                               or S[s]["wire"]["stop_log"] != S[s]["wire"]["stop_trace"])]
+    g.append(("G12 wire integrity", not bad, "all sets 0 ignored, 0 unattributed, trace = wire" if not bad else ", ".join(bad)))
     return g
 
 
