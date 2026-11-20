@@ -110,8 +110,14 @@ def new_edge(locale: str, gender: str, rng) -> Voice:
     return Voice("edge", EDGE[(locale, gender)], rate, pitch)
 
 
+UNSEEN = {"m": ["ar-YE-SalehNeural", "ar-IQ-BasselNeural"], "f": ["ar-YE-MaryamNeural", "ar-IQ-RanaNeural"]}
+VOICE_SET = "default"      # --voices unseen: callers only in voices used neither in training nor in the mirror
+
+
 def caller_voice(call: dict, rng) -> Voice:
     g = "f" if call.get("gender") == "f" else "m"
+    if VOICE_SET == "unseen":
+        return Voice("edge", UNSEEN[g][int(rng.integers(2))], f"{int(rng.integers(-8, 9)):+d}%", f"{int(rng.integers(-10, 11)):+d}Hz")
     loc = EDGE_BY_DIALECT.get(call.get("dialect", ""), "SA")
     if loc == "SA" and g == "f" and rng.random() < 0.8:
         return Voice("lahja", "lahja", speed=float(rng.uniform(0.9, 1.12)))
@@ -459,7 +465,10 @@ def main(argv=None) -> int:
     ap.add_argument("--which", required=True, help="mirror, stress-dev or stress-test")
     ap.add_argument("--out", required=True)
     ap.add_argument("--seed", type=int, default=31)
+    ap.add_argument("--voices", default="default", help="default, or unseen (referee sets)")
     a = ap.parse_args(argv)
+    global VOICE_SET
+    VOICE_SET = a.voices
     bank = json.loads(Path(a.bank).read_text(encoding="utf-8"))[a.which]
     calls = [c for key in bank for c in bank[key]]
     keys, seen = [], {}
@@ -475,7 +484,7 @@ def main(argv=None) -> int:
     out = Path(a.out)
     (out / "audio").mkdir(parents=True, exist_ok=True)
     (out / "labels").mkdir(parents=True, exist_ok=True)
-    tag = {"mirror": "M", "stress-dev": "d", "stress-test": "t", "ht-dev": "h", "ht-test": "k"}.get(a.which, "X")
+    tag = {"mirror": "M", "stress-dev": "d", "stress-test": "t", "ht-dev": "h", "ht-test": "k", "nt3": "R"}.get(a.which, "X")
     scen, counts, problems = [], {}, []
     for i, (c, (p, _), rng) in enumerate(zip(calls, plans, rngs)):
         key = c.get("probe") or c["category"]

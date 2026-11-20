@@ -175,6 +175,45 @@ def ask(sections: list[tuple[str, int, str]], seed: int, avoid: dict | None = No
     raise RuntimeError("Gemini did not return a usable bank")
 
 
+NT3 = {   # PLAN_V5 §4: the blind referee, hidden-set proportions (about 45 % STOP, 45 % KEEP, 10 % EITHER), 60 calls
+    "GI": (8, "All STOP: objections, corrections, questions about what the agent said, asking it to wait, change requests, "
+              "one opening like an acknowledgement then turning into a request, one single firm word."),
+    "BC": (8, "All KEEP: listening only. Short, doubled, long agreeing, dialect forms, blessings, agreeing with the content."),
+    "HT": (7, "6 KEEP while the agent talks (fillers, thinking aloud, self-talk, recalling, weighing options aloud, repeating a "
+              "number while writing) and 1 TAKE_TURN (the agent asked a question; the caller answers with pauses, marked "
+              "[pause N required] / [pause N optional])."),
+    "BG": (7, "All KEEP, the caller silent (u1 = null): TV (put the line in 'tv'), people in the room talking to each other or "
+              "calling someone (put it in 'side', with 'side_who'), street, cafe."),
+    "NV": (7, "All KEEP, no caller words (u1 = null): cough, laugh, sigh, sneeze, throat clear, speakerphone echo."),
+    "AM": (8, "Ambiguous tokens («طيب», «خلاص», «أوكي», «إنزين», dialect forms): 3 EITHER preferred KEEP (alone, falling), "
+              "3 STOP (token then the caller takes the floor; mark the clear word), 2 EITHER preferred STOP (impatient)."),
+    "OV": (8, "Overlap: 4 STOP (answering the agent's question as it starts again; picking an offered option; loud talk-over) "
+              "and 4 KEEP (completing the agent's phrase, repeating its word as support, a quick acknowledgement at its start)."),
+    "DV": (7, "Non-Najdi dialects, a different one each call: 4 STOP (floor bids in that dialect) and 3 KEEP (acknowledgements)."),
+}
+
+
+def ask_claude(sections, seed: int) -> dict[str, list[dict]]:
+    """The same brief, written by Claude (claude -p) instead of Gemini: run in an empty folder with no tools, so it sees
+    nothing of this repository."""
+    import subprocess
+    import tempfile
+    name, n, brief = sections[0]
+    prompt = ("You write test calls for an Arabic turn-taking benchmark: an AI phone agent talks, and the caller (Saudi or "
+              "Gulf) sometimes takes the floor and sometimes only listens. You are a native speaker and an experienced script "
+              "writer. Here are the official definitions:\n\n" + scripts_context() +
+              f"\n\nWrite {n} calls for category {name}.\nBrief: {brief}\nSpread the dialects (at most 40% Najdi, include "
+              f"Hijazi and Gulf). Variation seed: {seed}.\n\n" + SCHEMA +
+              "\nAnswer with the JSON object only, no other text, and do not use any tools.")
+    with tempfile.TemporaryDirectory() as d:
+        out = subprocess.run(["claude", "-p", "--disallowedTools", "Bash,Read,Write,Edit,Glob,Grep,WebFetch,WebSearch,Task"],
+                             input=prompt, capture_output=True, text=True, cwd=d, timeout=900)
+    text = out.stdout.strip()
+    text = text[text.find("{"): text.rfind("}") + 1]
+    calls = json.loads(text)["calls"]
+    return {name: calls[:n]}
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--out", default=str(KIT / "data" / "cp_bank.json"))
@@ -185,6 +224,22 @@ def main(argv=None) -> int:
     out = Path(a.out)
     bank = json.loads(out.read_text(encoding="utf-8")) if out.exists() else {}
     want = a.only.split(",")
+    if "nt3" in want:                          # PLAN_V5 referee: one category per request, written by Claude
+        for k, (n, brief) in NT3.items():
+            if k in bank.get("nt3", {}):
+                continue
+            t0 = time.time()
+            try:
+                got = ask_claude([(k, n, brief)], a.seed + zlib.crc32(f"nt3/{k}".encode()) % 1000)
+            except Exception as e:  # noqa: BLE001
+                print(f"  nt3 {k}: failed ({type(e).__name__})", flush=True)
+                continue
+            for c in got[k]:
+                c["category"], c["probe"] = k, None
+            bank.setdefault("nt3", {})[k] = got[k]
+            out.write_text(json.dumps({**json.loads(out.read_text(encoding="utf-8")) if out.exists() else {}, "nt3": bank["nt3"]},
+                                      ensure_ascii=False, indent=1), encoding="utf-8")
+            print(f"  nt3 {k}: {len(got[k])} calls ({time.time() - t0:.0f}s)", flush=True)
     groups = {"mirror": [["GI", "BC", "HT", "BG"], ["NV", "AM", "OV", "DV"]],
               "stress": [["S1", "S2", "S3", "S4"], ["S5"], ["S6"], ["S7"]]}
 

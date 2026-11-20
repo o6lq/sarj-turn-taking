@@ -64,6 +64,9 @@ RESUME_MS = 460          # take a stop back only inside this window (the scorer 
 RESUME_GAP_MS = 120      # ...once the sound has ended for this long...
 RESUME_MAX_VOICED_MS = 1200  # ...it was short...
 RESUME_P = 0.3           # ...and the full reading says it was not a floor bid
+CONFIRM_READS = 2        # E2: a WEAK stop reason must be confirmed by the next read of the same candidate (1 = off)
+CONFIRM_WAIT_MS = 220    # ...or, if no read comes this soon (or the voice pauses 120 ms), stop on what we have
+WEAK_WHY = ("content words", "question", "model is sure", "answers the agent's question")
 OPTION_ANSWER = 1        # F2: picking an option the agent offered is a floor bid, not an echo
 OPTION_EARLY_MS = 400    # ...a candidate that opened this soon after the agent started counts as an answer
 Q_CONTEXT_MS = 0         # F6: this long after an agent question/offer, an answer needs less evidence...
@@ -278,6 +281,12 @@ class TurnTaker:
         not_caller = c.get("spk") is not None and c["spk"] < SPK_MIN
         if c["voiced"] >= LONG_MS and rel >= -LONG_REL_DB and not not_caller and not (c["feats"] and c["feats"]["only_bc"]):
             return self._stop("sustained loud speech", c)
+        cf = c.get("confirm")
+        if cf and (self.ms - cf["t"] >= CONFIRM_WAIT_MS or (not is_speech and self.ms - c["last"] >= 120)):
+            c.pop("confirm")                     # E2: no second read in time, or the caller paused: decide on what we have
+            self._log("confirm_timeout", confirm_wait_ms=self.ms - cf["t"])
+            self.stop_info = {"t": self.ms, "cid": c["id"], "strong": False, "final": False}
+            return self._stop(f"{cf['why']} (no second read within {self.ms - cf['t']} ms)", c)
         return None
 
     def _agent_slope(self) -> float:
@@ -488,8 +497,20 @@ class TurnTaker:
         if tag[0] == "final":
             return self._maybe_resume(p, f, why)
         if speaking and not self.stopped and p >= MODEL_TH and not NEVER_STOP:
+            weak = CONFIRM_READS >= 2 and any(k in why.split(" (")[0] for k in WEAK_WHY) and f["bid"] == 0
+            if weak and not c.get("confirm"):
+                c["confirm"] = {"t": self.ms, "why": why}
+                self._log("confirm_wait", why=why, p=round(p, 2))
+                return None
+            if c.get("confirm"):
+                wait = self.ms - c.pop("confirm")["t"]
+                why = f"{why} (confirmed after {wait} ms)"
+                self._log("confirm_ok", confirm_wait_ms=wait)
             self.stop_info = {"t": self.ms, "cid": c["id"], "strong": f["bid"] >= 1 or p >= 0.95, "final": False}
             return self._stop(why, c)
+        if c.get("confirm") and p < MODEL_TH:
+            cf = c.pop("confirm")
+            self._log("confirm_dropped", why=cf["why"], confirm_wait_ms=self.ms - cf["t"])
         return None
 
     # ------------------------------------------------------------------ RESUME: take back a stop that was a backchannel

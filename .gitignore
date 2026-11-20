@@ -28,3 +28,6 @@ models/_archive/
 # checkpoint mirror + stress sets: measurement only, never in the repo or in training (PLAN_V3 §3.2)
 data/cp_bank*.json
 data/cp-*/
+
+# blind referee (PLAN_V5 §4): never in git
+data/novel-test-3/
