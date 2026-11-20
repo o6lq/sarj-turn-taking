@@ -103,6 +103,7 @@ ACK_TOKENS = BACKCHANNEL | FILLER | AMBIG | POLITE | {norm(w) for w in "انا �
 
 
 CLEAN_ASR = True
+AMBIG_CONT = 1   # F5
 
 
 def clean_asr(text: str) -> tuple[str, dict]:
@@ -183,7 +184,13 @@ def analyse(text: str, agent_text: str = "") -> dict:
             content += 1
     # «خلاص خلاص» = enough (floor bid); «طيب طيب» = okay okay (acknowledgement); either + more words = bid
     khalas = sum(1 for w in words if w == "خلاص")
-    repeated_amb = khalas >= 2 or (amb >= 1 and (content + bid) >= 1)
+    # F5: any non-backchannel word after «طيب/خلاص» (also a word repeated from the agent: «طيب الخميس») = a floor bid
+    after = 0
+    if AMBIG_CONT and amb:
+        first = next(i for i, w in enumerate(words) if w in AMBIG)
+        after = sum(1 for w in words[first + 1:] if w not in BACKCHANNEL and w not in FILLER and w not in AMBIG
+                    and w not in POLITE and len(w) >= 2)
+    repeated_amb = khalas >= 2 or (amb >= 1 and (content + bid) >= 1) or (AMBIG_CONT and after >= 1)
     # «فاهم عليك» = I follow you
     if "عليك" in words and any(w in ("فاهم", "فهم", "فاهمه") for w in words) and content >= 1:
         content, bc = content - 1, bc + 1

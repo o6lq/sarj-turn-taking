@@ -42,3 +42,10 @@ def test_thinking_and_side_search_cues():
     assert L.cue_analysis("وين وديتها يا ربي", ctx, "")["think"]
     assert L.bc_phrase("الحمدلله زين") and L.bc_phrase("الله يبيض وجهك يا أخوي") is False or True
     assert not L.bc_phrase("الحمد لله بس المبلغ غلط")
+
+
+def test_ambiguous_token_with_continuation():
+    agent = "موعدك يوم الخميس الساعة عشر الصبح في فرع الملقا"
+    assert L.analyse("طيب الخميس", agent)["repeated_ambig"]          # words from the agent count as continuation
+    assert not L.analyse("طيب", agent)["repeated_ambig"]
+    assert not L.analyse("طيب طيب", agent)["repeated_ambig"]
