@@ -38,6 +38,10 @@ MIN_LOGPROB = -0.9       # content words count only if Whisper was reasonably su
 CONTENT_MIN = 2          # new-content words that make a floor bid
 LONG_MS = 2000           # safety net: sustained loud speech this long -> stop even without words
 LONG_REL_DB = 3.0
+SUSTAIN_MS = 0           # E3: a turn-opener first word («طيب/خلاص», a question word) + still talking this long -> stop; 0 = off
+SUSTAIN_GAP_MS = 150     # ...gaps shorter than this still count as one stretch
+SUSTAIN_REL_DB = 4.0     # ...at least U0 - 4 dB
+SUSTAIN_SPK = 0.30       # ...and not clearly another voice
 DEFAULT_REF_DB = -21.0   # caller level before U0 has been heard
 AGENT_TAIL_MS = 200
 EOT_BASE_MS = 600        # silence after a complete answer before TAKE_TURN
@@ -64,9 +68,9 @@ RESUME_MS = 460          # take a stop back only inside this window (the scorer 
 RESUME_GAP_MS = 120      # ...once the sound has ended for this long...
 RESUME_MAX_VOICED_MS = 1200  # ...it was short...
 RESUME_P = 0.3           # ...and the full reading says it was not a floor bid
-CONFIRM_READS = 2        # E2: a WEAK stop reason must be confirmed by the next read of the same candidate (1 = off)
+CONFIRM_READS = 1        # E2 (rejected: +160-190 ms median latency, novel-test -4): 2 = a WEAK stop reason must be confirmed by the next read of the same candidate (1 = off)
 CONFIRM_WAIT_MS = 220    # ...or, if no read comes this soon (or the voice pauses 120 ms), stop on what we have
-WEAK_WHY = ("content words", "question", "model is sure", "answers the agent's question")
+WEAK_WHY = ("question", "model is sure")   # E2b: only the two most doubtful reasons (all four cost real stops: novel-test 84.9 -> 80.9)
 OPTION_ANSWER = 1        # F2: picking an option the agent offered is a floor bid, not an echo
 OPTION_EARLY_MS = 400    # ...a candidate that opened this soon after the agent started counts as an answer
 Q_CONTEXT_MS = 0         # F6: this long after an agent question/offer, an answer needs less evidence...
@@ -263,6 +267,7 @@ class TurnTaker:
                              "levels": [], "sub": -1e9, "text": "", "feats": None, "agent_slope": self._agent_slope()}
             self._log("candidate", level_rel=round(db - self.ref_db, 1))
         if is_speech:
+            c["run"] = c.get("run", 0) + FRAME_MS if self.ms - c["last"] <= SUSTAIN_GAP_MS + FRAME_MS else FRAME_MS
             c["voiced"] += FRAME_MS
             c["last"] = self.ms
             c["levels"].append(db)
@@ -281,6 +286,9 @@ class TurnTaker:
         not_caller = c.get("spk") is not None and c["spk"] < SPK_MIN
         if c["voiced"] >= LONG_MS and rel >= -LONG_REL_DB and not not_caller and not (c["feats"] and c["feats"]["only_bc"]):
             return self._stop("sustained loud speech", c)
+        if SUSTAIN_MS and is_speech and c.get("run", 0) >= SUSTAIN_MS and self._opener_still_talking(c, rel):
+            self.stop_info = {"t": self.ms, "cid": c["id"], "strong": False, "final": False}
+            return self._stop(f"opened with «{c['first_word']}» and kept talking {c['run']} ms", c)
         cf = c.get("confirm")
         if cf and (self.ms - cf["t"] >= CONFIRM_WAIT_MS or (not is_speech and self.ms - c["last"] >= 120)):
             c.pop("confirm")                     # E2: no second read in time, or the caller paused: decide on what we have
@@ -288,6 +296,19 @@ class TurnTaker:
             self.stop_info = {"t": self.ms, "cid": c["id"], "strong": False, "final": False}
             return self._stop(f"{cf['why']} (no second read within {self.ms - cf['t']} ms)", c)
         return None
+
+    def _opener_still_talking(self, c: dict, rel: float) -> bool:
+        """E3: the first recognised word opens a turn (ambiguous token or question word), never a backchannel, filler or
+        echo; the latest read shows no call to someone else, no thinking aloud, no weighing; level and voice are the caller's."""
+        w = c.get("first_word")
+        if not w or not (w in lexicon.AMBIG or w in lexicon.CUE):
+            return False
+        f = c["feats"] or {}
+        if f.get("cue_vocative") or f.get("cue_think") or f.get("cue_strong_think") or f.get("cue_weighing") or f.get("bc_phrase"):
+            return False
+        if rel < -SUSTAIN_REL_DB or (c.get("spk") is not None and c["spk"] < SUSTAIN_SPK):
+            return False
+        return True
 
     def _agent_slope(self) -> float:
         """Pitch slope (semitones/s) of the agent's last 600 ms: a falling agent invites a backchannel."""
@@ -482,6 +503,8 @@ class TurnTaker:
         if res.get("spk") is not None and self.ref_emb is not None:
             c["spk"] = float(np.dot(res["spk"], self.ref_emb))
         a = lexicon.analyse(text, self.agent_text)
+        if a["words"] and not c.get("first_word"):
+            c["first_word"] = a["words"][0]           # E3: how this candidate opened
         f = self._features(a, c)
         f.update(self._option_feats(text, c))
         if CUE_MODE:
