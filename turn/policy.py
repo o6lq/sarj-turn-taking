@@ -71,6 +71,7 @@ Q_CONTENT_MIN = 1        # ...one content word
 Q_SEM_HI = 0.75          # ...or a lower meaning score
 HESITATION = 1           # F7: negations inside a sentence, «عندي» alone, digits alone, weighing options and
                          #     filler-led thinking are not floor bids
+WEIGHING = 1             # F9: two alternatives joined by «ولا/أو», no choice word = deliberating aloud
 CUE_MODE = 2             # F4 (1 = also needs topic evidence: too slow on real bids): question/call/command words stop only when about the call or addressed to the agent
 CUE_SPK_VETO = 0.10      # ...and never in a voice clearly not the caller's (when the voiceprint is known)
 SPK_HARD = 0.10          # any rule stop: a known voiceprint this far from the caller's = someone else...
@@ -400,7 +401,8 @@ class TurnTaker:
             return 1.0, "floor-bid word"
         if f["repeated_ambig"]:
             return 0.9, "«خلاص/طيب» with more after it"
-        weighing = HESITATION and not f.get("choice") and (f.get("option_distinct", 0) >= 2 or f.get("cue_strong_think"))
+        weighing = HESITATION and not f.get("choice") and (f.get("option_distinct", 0) >= 2 or f.get("cue_strong_think")
+                                                          or (WEIGHING and f.get("cue_weighing")))
         if f.get("option", 0) >= 1 and not weighing and (f.get("choice") or (not f.get("just_said") and (
                 f.get("accept") or f.get("early") or f.get("opt_prev")))):
             return 0.85, "answers the agent's question with an option it offered"
@@ -412,6 +414,8 @@ class TurnTaker:
         if f["content"] >= cmin:
             if CUE_MODE and f.get("cue_think") and not f.get("cue_address") and not f.get("cue_topic"):
                 return 0.2, "thinking aloud (talking to oneself)"
+            if WEIGHING and f.get("cue_weighing"):
+                return 0.2, "weighing the options aloud (no choice yet)"
             if HESITATION and f.get("cue_strong_think") and not f.get("cue_address") and not f.get("cue_directed"):
                 return 0.2, "thinking aloud about the call (filler-led, not addressed to the agent)"
             if f["logprob"] < MIN_LOGPROB:

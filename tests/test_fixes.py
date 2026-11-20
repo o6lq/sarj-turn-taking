@@ -51,3 +51,11 @@ def test_hesitation_structure():
     assert c("عندي دوام بكرة", "", "")["directed"] == 0 and c("عندي سؤال", "", "")["directed"] >= 1
     assert c("ثلاثة ثمانية اربعة", "", "")["digits_only"] and not c("خمسة", "", "")["digits_only"]
     assert c("اممم الفاتورة هذي", "", "")["strong_think"] and not c("اه الخميس", "", "")["strong_think"]
+
+
+def test_weighing_alternatives():
+    c = L.cue_analysis
+    assert c("السبت ولا الأحد", "", "")["weighing"]
+    assert c("الصباحية او المسائية يعني", "", "")["weighing"]
+    assert not c("خلني على السبت", "", "")["weighing"]
+    assert not c("لا الأحد ولا السبت ما يناسبوني", "", "")["weighing"]       # a refusal, not weighing

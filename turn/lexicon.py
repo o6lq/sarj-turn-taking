@@ -340,9 +340,16 @@ def cue_analysis(text: str, context: str = "", agent_name: str = "") -> dict:
     strong_think = filler_initial or any(w in STRONG_THINK for w in ws) or any(p in t for p in SELF_ANSWER)
     meaningful = [w for w in ws if w not in FILLER and w not in BACKCHANNEL and w != "و"]
     digits_only = len(meaningful) >= 2 and all(w in ARABIC_DIGITS or w.lstrip("و") in ARABIC_DIGITS or w.isdigit() for w in meaningful)
+    # F9: weighing alternatives aloud («الأربعاء ولا الخميس…», «الشهري… السنوي…») without choosing
+    slots = {_stem(w) for w in ws if w in WEEKDAYS or w in DAYPARTS}
+    joined = any(w in ("ولا", "او") and 0 < i < len(ws) - 1 and ws[i - 1] not in _STOP_OPT and ws[i + 1] not in _STOP_OPT
+                 for i, w in enumerate(ws))
+    chooses = any(w in STRONG_CHOICE for w in ws)
+    addressed = any(w in ADDRESS and w != "يعني" for w in ws)          # «يعني» here is a filler
+    weighing = (len(slots) >= 2 or joined) and not chooses and not addressed and directed == 0
     return {"strong_bid": strong, "cue": cue, "vocative": int(voc), "topic": int(topic), "address": int(address),
             "think": int(think or strong_think), "lone_cue": int(lone), "directed": directed,
-            "strong_think": int(strong_think), "digits_only": int(digits_only)}
+            "strong_think": int(strong_think), "digits_only": int(digits_only), "weighing": int(weighing)}
 
 
 def bc_phrase(text: str) -> bool:
