@@ -42,3 +42,12 @@ def test_thinking_and_side_search_cues():
     assert L.cue_analysis("وين وديتها يا ربي", ctx, "")["think"]
     assert L.bc_phrase("الحمدلله زين") and L.bc_phrase("الله يبيض وجهك يا أخوي") is False or True
     assert not L.bc_phrase("الحمد لله بس المبلغ غلط")
+
+
+def test_hesitation_structure():
+    c = L.cue_analysis
+    assert c("والله الموتر حقي ما يتحمل", "", "")["directed"] == 0     # a negation inside a sentence
+    assert c("لا لا مو هذا", "", "")["directed"] >= 1
+    assert c("عندي دوام بكرة", "", "")["directed"] == 0 and c("عندي سؤال", "", "")["directed"] >= 1
+    assert c("ثلاثة ثمانية اربعة", "", "")["digits_only"] and not c("خمسة", "", "")["digits_only"]
+    assert c("اممم الفاتورة هذي", "", "")["strong_think"] and not c("اه الخميس", "", "")["strong_think"]

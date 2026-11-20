@@ -301,6 +301,9 @@ BC_PHRASES = [norm(p) for p in ["الحمد لله", "الحمدلله", "بيض
                                   "ماقصرت", "تسلم", "تسلمين", "مشكور", "مشكوره", "الله يبارك فيك", "حياك الله"]]
 
 
+NEGATIONS = {norm(w) for w in "لا ما مو مب مش مافي ماني مابي مابغى".split()}
+ASK_NOUNS = {norm(w) for w in "سؤال استفسار ملاحظه طلب مشكله شكوى سوال".split()}
+STRONG_THINK = {norm(w) for w in "ربي يارب يارباه مدري ادري افكر اشوف اشوفه نسيت اتذكر شسمه".split()}
 _FUNCTION = {norm(w) for w in "اللي الي هذا هذي هاذا ذا ذي هذاك هذيك في من على علي الى عن مع انا هو هي احنا كذا كدا جذي الحين دحين بعد قبل عند حق".split()}
 
 
@@ -322,8 +325,24 @@ def cue_analysis(text: str, context: str = "", agent_name: str = "") -> dict:
     think = any(w in THINK_WORDS for w in ws) or any(w in FILLER and w != "يعني" for w in ws) or any(p in t for p in SELF_ANSWER) \
         or (text or "").rstrip().endswith(("…", "..."))
     lone = cue >= 1 and not [w for w in others if w != "يعني"] and strong == 0
+    # F7: hesitation structure
+    directed = 0                                   # strong bid words that really open a turn
+    for i, w in enumerate(ws):
+        if w not in STRONG_BID:
+            continue
+        if w in NEGATIONS and i >= 3 and not (i > 0 and ws[i - 1] in NEGATIONS):
+            continue                               # «الموتر ما يتحمل»: a negation inside a sentence, not an objection
+        if w == "عندي" and not (i + 1 < len(ws) and ws[i + 1] in ASK_NOUNS):
+            continue                               # «عندي دوام» = I have work; «عندي سؤال» = a bid
+        directed += 1
+    # a clear hesitation filler first («اممم»، «ممم»، «ااا»، «يعني»), not «اه» (which is also «yes»)
+    filler_initial = bool(ws) and re.fullmatch(r"(ا+م{2,}|ام+|ه?م{2,}|ا{2,}|يعني)", ws[0] or "x") is not None
+    strong_think = filler_initial or any(w in STRONG_THINK for w in ws) or any(p in t for p in SELF_ANSWER)
+    meaningful = [w for w in ws if w not in FILLER and w not in BACKCHANNEL and w != "و"]
+    digits_only = len(meaningful) >= 2 and all(w in ARABIC_DIGITS or w.lstrip("و") in ARABIC_DIGITS or w.isdigit() for w in meaningful)
     return {"strong_bid": strong, "cue": cue, "vocative": int(voc), "topic": int(topic), "address": int(address),
-            "think": int(think), "lone_cue": int(lone)}
+            "think": int(think or strong_think), "lone_cue": int(lone), "directed": directed,
+            "strong_think": int(strong_think), "digits_only": int(digits_only)}
 
 
 def bc_phrase(text: str) -> bool:

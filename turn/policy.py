@@ -66,6 +66,11 @@ RESUME_MAX_VOICED_MS = 1200  # ...it was short...
 RESUME_P = 0.3           # ...and the full reading says it was not a floor bid
 OPTION_ANSWER = 1        # F2: picking an option the agent offered is a floor bid, not an echo
 OPTION_EARLY_MS = 400    # ...a candidate that opened this soon after the agent started counts as an answer
+Q_CONTEXT_MS = 0         # F6: this long after an agent question/offer, an answer needs less evidence...
+Q_CONTENT_MIN = 1        # ...one content word
+Q_SEM_HI = 0.75          # ...or a lower meaning score
+HESITATION = 1           # F7: negations inside a sentence, «عندي» alone, digits alone, weighing options and
+                         #     filler-led thinking are not floor bids
 CUE_MODE = 2             # F4 (1 = also needs topic evidence: too slow on real bids): question/call/command words stop only when about the call or addressed to the agent
 CUE_SPK_VETO = 0.10      # ...and never in a voice clearly not the caller's (when the voiceprint is known)
 SPK_HARD = 0.10          # any rule stop: a known voiceprint this far from the caller's = someone else...
@@ -147,6 +152,7 @@ class TurnTaker:
         self.prev_agent_text = ""
         self.agent_utt = 0
         self.agent_name = ""
+        self.q_until = -1e9
 
     def on_scenario_start(self, context: dict | None = None):
         self.reset_call()
@@ -172,6 +178,8 @@ class TurnTaker:
     def on_agent_end(self):
         self.agent_active = False
         self.agent_end_ms = self.ms
+        if Q_CONTEXT_MS and lexicon.asks_or_offers(self.agent_text):
+            self.q_until = self.ms + Q_CONTEXT_MS
         if self.dlog:
             self.dlog.event({"call": self.call_no, "t": self.ms, "kind": "agent_end", "agent_utt": self.agent_utt})
 
@@ -304,7 +312,7 @@ class TurnTaker:
             return {"option": 0}
         recent = {lexicon._stem(lexicon.norm(w)) for w in words[max(0, k - 4):k]}
         hit_stems = {lexicon._stem(h) for h in oa["hits"]}
-        return {"option": oa["option"], "choice": int(oa["strong"]), "accept": int(oa["accept"]),
+        return {"option": oa["option"], "option_distinct": len(hit_stems), "choice": int(oa["strong"]), "accept": int(oa["accept"]),
                 "opt_prev": int(bool(hit_stems & prev_opts)), "just_said": int(hit_stems <= recent),
                 "early": int(c["start"] - self.agent_start_ms <= OPTION_EARLY_MS)}
 
@@ -361,11 +369,29 @@ class TurnTaker:
         z = m["bias"] + sum(m["w"][k] * (f.get(k, 0.0) - m["mu"][k]) / (m["sd"][k] or 1.0) for k in feats)
         return float(1 / (1 + np.exp(-z)))
 
+    def _in_question_context(self) -> bool:
+        """F6: the agent asked or offered within the last 3 s (its last utterance, or the part of this one heard)."""
+        if not Q_CONTEXT_MS:
+            return False
+        if self.ms <= self.q_until:
+            return True
+        words = self.agent_text.split()
+        k = min(len(words), int((self.ms - self.agent_start_ms) / 1000 * 2.6) + 2)
+        recent = words[max(0, k - int(Q_CONTEXT_MS / 1000 * 2.6)):k]
+        return any(("؟" in w or "?" in w) for w in recent)
+
     def _rules(self, f: dict) -> tuple[float, str]:
         sem = f.get("sem_p", -1.0)
+        q = self._in_question_context()
+        cmin = Q_CONTENT_MIN if q else CONTENT_MIN
+        sem_hi = Q_SEM_HI if q else SEM_HI
         has_sem = USE_SEM and sem >= 0
         if CUE_MODE and f.get("bc_phrase"):
             return 0.1, "a backchannel or blessing phrase"
+        if HESITATION and f.get("cue_digits_only") and not f.get("cue_directed"):
+            return 0.15, "repeating or writing down numbers"
+        if HESITATION and f["bid"] >= 1 and not f.get("cue_directed") and not f.get("cue_cue") and not f.get("cue_vocative"):
+            f = {**f, "bid": 0}                       # the only bid words were a mid-sentence negation or «عندي»
         if f["bid"] >= 1:
             if CUE_MODE:
                 v = self._cue_verdict(f)
@@ -374,22 +400,25 @@ class TurnTaker:
             return 1.0, "floor-bid word"
         if f["repeated_ambig"]:
             return 0.9, "«خلاص/طيب» with more after it"
-        if f.get("option", 0) >= 1 and (f.get("choice") or (not f.get("just_said") and (
+        weighing = HESITATION and not f.get("choice") and (f.get("option_distinct", 0) >= 2 or f.get("cue_strong_think"))
+        if f.get("option", 0) >= 1 and not weighing and (f.get("choice") or (not f.get("just_said") and (
                 f.get("accept") or f.get("early") or f.get("opt_prev")))):
             return 0.85, "answers the agent's question with an option it offered"
-        if f["content"] >= CONTENT_MIN and has_sem and sem < SEM_LO and (not self.model or self._model_p(f) < 0.5):
+        if f["content"] >= cmin and has_sem and sem < SEM_LO and (not self.model or self._model_p(f) < 0.5):
             return 0.2, f"words, but the meaning is not for the agent (meaning p={sem:.2f})"
-        if has_sem and sem >= SEM_HI and f["n"] >= 2 and f["logprob"] >= MIN_LOGPROB and f["rel_db"] >= -3.0 \
+        if has_sem and sem >= sem_hi and f["n"] >= 2 and f["logprob"] >= MIN_LOGPROB and f["rel_db"] >= -3.0 \
                 and f["spk_sim"] >= SEM_SPK:
             return 0.85, f"the meaning asks for the floor (meaning p={sem:.2f})"
-        if f["content"] >= CONTENT_MIN:
+        if f["content"] >= cmin:
             if CUE_MODE and f.get("cue_think") and not f.get("cue_address") and not f.get("cue_topic"):
                 return 0.2, "thinking aloud (talking to oneself)"
+            if HESITATION and f.get("cue_strong_think") and not f.get("cue_address") and not f.get("cue_directed"):
+                return 0.2, "thinking aloud about the call (filler-led, not addressed to the agent)"
             if f["logprob"] < MIN_LOGPROB:
                 return 0.3, f"words unclear (confidence {f['logprob']:.2f})"
             if f["cand_age_s"] > CONTENT_MAX_AGE_S and f["rel_db"] < -4:
                 return 0.2, "long, quiet, continuous talk without a floor bid: background"
-            return 0.85, f"{f['content']} content words"
+            return 0.85, f"{f['content']} content words" + (" after an agent question" if q and f["content"] < CONTENT_MIN else "")
         if f["question"] and f["n"] >= 2:
             if has_sem and sem < SEM_LO:
                 return 0.2, f"looks like a question, but the meaning is an acknowledgement (meaning p={sem:.2f})"
