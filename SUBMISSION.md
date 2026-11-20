@@ -57,3 +57,35 @@ clarity of your demo and evaluation (5). End-of-turn (`TAKE_TURN`) has its own l
 total. Details: `SCORING.md` and `CHALLENGE.md`.
 
 By submitting, you accept the participation terms in `CHALLENGE.md` (section 10), including the licence they grant.
+
+---
+
+## Our hand-in (sarj-saud)
+
+**Hand in the commit of tag `v2-final`** (scored code identical to `v2.5`, `7c52fdd`). The safe fallback is
+`v2.0` (`84f9b21`), the version Sarj ran at the checkpoint (91.9).
+
+`python -m ttbench.ready` on 20 Nov, 11:20 (commit `6a5ffb5`; the next commit only adds this section):
+
+```
+  ✓ team name set in my_system.py (now: 'sarj-saud')
+  ✓ all changes committed to git (commit: 6a5ffb5)
+  ✓ WRITEUP.md written (2–4 pages, no <...> left)
+  ✓ WRITEUP.md lists at least 5 failure cases from the dev set
+  ✓ WRITEUP.md section 8 declares external services, models and data (or says none)
+  ✓ connection check PASS
+Ready. Hand in: team 'sarj-saud', commit 6a5ffb5, WRITEUP.md.
+```
+
+Phase 3 checks on this code: real-time dev 99.0 · checkpoint mirror 96.9 (v2.0: 92.0), 96.4 through a Cloudflare
+tunnel · one process for 120 calls: no crash, all pings answered, memory +295 MB · decisions identical on 99 % of
+events across three runs.
+
+**External services** (none in the scored decision path; full list in `WRITEUP.md` §8): Claude Opus 5.5 (teacher
+labels, demo fallback), Gemini (demo brain and voice; writing test sentences), ElevenLabs (optional demo voice),
+Microsoft Edge TTS (test calls, fallback demo voice). Local models: Cohere Transcribe Arabic, Whisper turbo, Silero VAD,
+CAM++, CAMeLBERT-DA, Smart Turn (off), Lahja SA (test voice only). Data: Sarj dev set, ESC-50.
+
+Run for the final: `git fetch --tags && git checkout v2-final && bash tools/checkpoint.sh` (or
+`python my_system.py --host 0.0.0.0`). Optional decision log, timings and rules only, no text and no audio:
+`TT_DECISION_LOG=runs/final-decisions.jsonl python my_system.py --host 0.0.0.0`.
