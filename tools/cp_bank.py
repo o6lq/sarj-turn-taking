@@ -237,8 +237,9 @@ def main(argv=None) -> int:
             for c in got[k]:
                 c["category"], c["probe"] = k, None
             bank.setdefault("nt3", {})[k] = got[k]
-            out.write_text(json.dumps({**json.loads(out.read_text(encoding="utf-8")) if out.exists() else {}, "nt3": bank["nt3"]},
-                                      ensure_ascii=False, indent=1), encoding="utf-8")
+            disk = json.loads(out.read_text(encoding="utf-8")) if out.exists() else {}
+            disk["nt3"] = bank["nt3"]
+            out.write_text(json.dumps(disk, ensure_ascii=False, indent=1), encoding="utf-8")
             print(f"  nt3 {k}: {len(got[k])} calls ({time.time() - t0:.0f}s)", flush=True)
     groups = {"mirror": [["GI", "BC", "HT", "BG"], ["NV", "AM", "OV", "DV"]],
               "stress": [["S1", "S2", "S3", "S4"], ["S5"], ["S6"], ["S7"]]}
