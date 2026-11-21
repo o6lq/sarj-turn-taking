@@ -20,6 +20,8 @@ from pathlib import Path
 
 import numpy as np
 
+from concurrent.futures import ThreadPoolExecutor
+
 from . import acoustic, clock, decision_log, lexicon, semantic
 from . import asr as _asr
 from .echo import EchoSuppressor
@@ -72,6 +74,7 @@ Q_SEM_HI = 0.75          # ...or a lower meaning score
 HESITATION = 1           # F7: negations inside a sentence, «عندي» alone, digits alone, weighing options and
                          #     filler-led thinking are not floor bids
 WEIGHING = 1             # F9: two alternatives joined by «ولا/أو», no choice word = deliberating aloud
+ACK_BUT = 1              # T2: «أيوه بس…» (agreement + contrast word) is a floor bid the learned model may not veto
 CUE_MODE = 2             # F4 (1 = also needs topic evidence: too slow on real bids): question/call/command words stop only when about the call or addressed to the agent
 CUE_SPK_VETO = 0.10      # ...and never in a voice clearly not the caller's (when the voiceprint is known)
 SPK_HARD = 0.10          # any rule stop: a known voiceprint this far from the caller's = someone else...
@@ -110,21 +113,31 @@ def _heard_label(f: dict) -> str:
         return "hesitation"
     return "other"
 
+PAR_FEATS = 1            # T4: voice print + voice profile in parallel with speech recognition (identical values)
+_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="tt-audio-feats")
+
+
 class TurnTaker:
     def __init__(self, asr_fn=None):
         from .asr import transcribe
         from . import speaker
         self._speaker = speaker
 
+        def audio_feats(audio):
+            tail = audio[-16000 * 3:]
+            return (speaker.embed(tail) if USE_SPEAKER else None,
+                    acoustic.segment_profile(tail) if len(audio) >= 1600 else None)
+
         def job(payload):
             audio, agent_text = payload if isinstance(payload, tuple) else (payload, None)
+            # T4: the voice print and voice profile need only the audio, so they run on the CPU while the speech
+            # model (GPU) reads it. Same inputs, same functions: same values, the read just finishes sooner.
+            fut = _POOL.submit(audio_feats, audio) if PAR_FEATS else None
             r = dict(asr_fn(audio) if asr_fn else transcribe(audio, priority="normal" if agent_text is None else "urgent"))
             if agent_text is not None and USE_SEM and r.get("text"):
                 clean = lexicon.clean_asr(r["text"])[0]
                 r["sem"] = semantic.p_stop(agent_text, clean) if clean.strip() else None
-            e = speaker.embed(audio[-16000 * 3:]) if USE_SPEAKER else None
-            r["spk"] = e
-            r["prof"] = acoustic.segment_profile(audio[-16000 * 3:]) if len(audio) >= 1600 else None
+            r["spk"], r["prof"] = fut.result() if fut else audio_feats(audio)
             return r
         self.asr = clock.Async(job)
         from . import eot as _eot
@@ -345,7 +358,8 @@ class TurnTaker:
                 "logprob": c.get("logprob", -1.0), "echo_ratio": a["echoed"] / max(1, a["n"]),
                 **{"ac_" + k: float(np.nan_to_num(np.clip(c.get("ac", {}).get(k, 0.0), -300, 300))) for k in AC_KEYS},
                 "agent_slope": c.get("agent_slope", 0.0),
-                "sem_p": c.get("sem", -1.0) if c.get("sem") is not None else -1.0}
+                "sem_p": c.get("sem", -1.0) if c.get("sem") is not None else -1.0,
+                "ack_but": int(a.get("ack_but", 0))}
 
     def score(self, f: dict) -> tuple[float, str]:
         """P(the caller wants the floor). Learned weights if available, else transparent rules."""
@@ -364,6 +378,8 @@ class TurnTaker:
         # USE_MODEL == 2 (hybrid): the rules propose, the learned model can veto an unlikely stop
         sem = f.get("sem_p", -1.0)
         sure_caller = f["n"] >= 2 and f["rel_db"] >= -SEM_REL_DB and f["spk_sim"] >= SEM_SPK
+        if ACK_BUT and f.get("ack_but") and rp >= MODEL_TH:
+            return 1.0, f"{why}: «yes… but» (model p={mp:.2f})"
         if rp >= MODEL_TH and mp < HYB_TH and not (USE_SEM and sem >= SEM_HI and sure_caller):
             return 0.25, f"{why}, but the model doubts it (p={mp:.2f})"
         knows_caller = len(self.ref_levels) >= 8           # it may act alone only once it has heard the caller

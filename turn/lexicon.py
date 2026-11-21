@@ -141,6 +141,25 @@ def clean_asr(text: str) -> tuple[str, dict]:
     return t, flags
 
 
+# T2: "yes… but" — agreement first, then a contrast word: the caller is about to object or change something.
+# «أيوه بس…», «إيه لكن…», «طيب بس أنا…». Not «بس» alone (that is F4's job), and not «بس كذا / بس هذا» (= "just that").
+CONTRAST = {norm(w) for w in "بس لكن".split()}
+JUST_THAT = {norm(w) for w in "كذا كذاك هذا هذي هيك هيچ هاذا خلاص بس".split()}
+
+
+def ack_but(words: list[str]) -> int:
+    """1 when the words are acknowledgements followed by a contrast word, e.g. «أيوا بس», «إيه إيه لكن أبي»."""
+    for i, w in enumerate(words):
+        if w in CONTRAST:
+            if i == 0 or not all(x in BACKCHANNEL or x in AMBIG for x in words[:i]):
+                return 0
+            nxt = words[i + 1] if i + 1 < len(words) else ""
+            return int(nxt not in JUST_THAT)
+        if w not in BACKCHANNEL and w not in AMBIG:
+            return 0
+    return 0
+
+
 def analyse(text: str, agent_text: str = "") -> dict:
     """Turn the caller's words into simple, explainable features."""
     # Cohere wraps a whole reading in brackets when it is guessing at an unclear sound («(تيم هوليوود)»): unreliable
@@ -196,7 +215,7 @@ def analyse(text: str, agent_text: str = "") -> dict:
     if bid and len(words) == 1 and words[0] in WEAK_BID:
         bid, bc = 0, bc + 1
     question = "؟" in raw_text or "?" in raw_text
-    return {"words": words, "n": len(words), "bc": bc, "filler": fill, "bid": bid, "content": content,
+    return {"ack_but": ack_but(words), "words": words, "n": len(words), "bc": bc, "filler": fill, "bid": bid, "content": content,
             "echoed": echoed, "ambig": amb, "repeated_ambig": repeated_amb, "question": question,
             "first_bid": first_bid, "hallucination": halluc, "fluent_msa": clean_flags["fluent_msa"],
             "single_ack": len(words) == 1 and words[0] in ACK_TOKENS}
