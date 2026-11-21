@@ -48,6 +48,7 @@ SPK_MIN = 0.30           # below this similarity it is someone else (TV, a child
 SPK_LOUD_DB = -2.0       # ...unless it is clearly louder than the caller usually is
 HYB_TH = 0.3            # hybrid: below this learned probability a rule-based stop is vetoed (F8: 0.2 -> 0.3)
 PROMOTE_TH = 0.95        # hybrid: above this learned probability the model may stop on its own (1.01 = never)
+PROMOTE_ONE_UNKNOWN = 0  # T6 experiment: 1 = the model may not stop alone on one word that no list knows («زي»، «عزل»)
 PROMOTE_REL_DB = 4.0     # ...only when the voice is about as loud as the caller's
 EOT_SMART = 0            # 1: also ask Smart Turn v3.2 (voice-based end-of-turn) before taking the turn
 EOT_SMART_TH = 0.5       # below this P(complete) the caller is probably mid-thought...
@@ -371,7 +372,8 @@ class TurnTaker:
         if rp >= MODEL_TH and mp < HYB_TH and not (USE_SEM and sem >= SEM_HI and sure_caller):
             return 0.25, f"{why}, but the model doubts it (p={mp:.2f})"
         knows_caller = len(self.ref_levels) >= 8           # it may act alone only once it has heard the caller
-        if rp < MODEL_TH and mp >= PROMOTE_TH and f["n"] >= 1 and f["rel_db"] > -PROMOTE_REL_DB and knows_caller \
+        one_unknown = PROMOTE_ONE_UNKNOWN and f["n"] == 1 and f["content"] == 1 and not f.get("echoed")
+        if rp < MODEL_TH and mp >= PROMOTE_TH and f["n"] >= 1 and f["rel_db"] > -PROMOTE_REL_DB and knows_caller and not one_unknown \
                 and not self._side_or_self(f):
             return mp, f"model is sure (p={mp:.2f}) although the words are unclear"
         return rp, f"{why} (model p={mp:.2f})"
