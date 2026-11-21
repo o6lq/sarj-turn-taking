@@ -1,4 +1,4 @@
-# Write-up: sarj-saud
+# Write-up: sarj-team1
 
 ## 1. The idea
 
