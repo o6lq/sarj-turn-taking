@@ -20,6 +20,8 @@ from pathlib import Path
 
 import numpy as np
 
+from concurrent.futures import ThreadPoolExecutor
+
 from . import acoustic, clock, decision_log, lexicon, semantic
 from . import asr as _asr
 from .echo import EchoSuppressor
@@ -111,21 +113,31 @@ def _heard_label(f: dict) -> str:
         return "hesitation"
     return "other"
 
+PAR_FEATS = 1            # T4: voice print + voice profile in parallel with speech recognition (identical values)
+_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="tt-audio-feats")
+
+
 class TurnTaker:
     def __init__(self, asr_fn=None):
         from .asr import transcribe
         from . import speaker
         self._speaker = speaker
 
+        def audio_feats(audio):
+            tail = audio[-16000 * 3:]
+            return (speaker.embed(tail) if USE_SPEAKER else None,
+                    acoustic.segment_profile(tail) if len(audio) >= 1600 else None)
+
         def job(payload):
             audio, agent_text = payload if isinstance(payload, tuple) else (payload, None)
+            # T4: the voice print and voice profile need only the audio, so they run on the CPU while the speech
+            # model (GPU) reads it. Same inputs, same functions: same values, the read just finishes sooner.
+            fut = _POOL.submit(audio_feats, audio) if PAR_FEATS else None
             r = dict(asr_fn(audio) if asr_fn else transcribe(audio, priority="normal" if agent_text is None else "urgent"))
             if agent_text is not None and USE_SEM and r.get("text"):
                 clean = lexicon.clean_asr(r["text"])[0]
                 r["sem"] = semantic.p_stop(agent_text, clean) if clean.strip() else None
-            e = speaker.embed(audio[-16000 * 3:]) if USE_SPEAKER else None
-            r["spk"] = e
-            r["prof"] = acoustic.segment_profile(audio[-16000 * 3:]) if len(audio) >= 1600 else None
+            r["spk"], r["prof"] = fut.result() if fut else audio_feats(audio)
             return r
         self.asr = clock.Async(job)
         from . import eot as _eot
