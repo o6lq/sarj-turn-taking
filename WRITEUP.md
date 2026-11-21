@@ -1,8 +1,5 @@
 # Write-up: sarj-team1
 
-Hand-in: commit `2084030` (tag `v2.6`). Its decisions are identical to `v2.5`; `v2.6` only adds a label, a
-confidence and the heard text to each decision (metadata, no change in timing or type).
-
 ## 1. The idea
 
 **Approach, in a few words:** a layered hybrid: acoustic checks, local speech recognition, a Gulf Arabic lexicon, a
@@ -55,7 +52,7 @@ confidence and the heard text. The talking agent in our demo is separate from th
 
 | | |
 |---|---|
-| Median stop latency on the dev set (real-time run, from the report) | 0 ms after the intent became evident; p90 772 ms (7 stops) |
+| Median stop latency on the dev set (real-time run, from the report) | 0 ms after the intent became evident; p90 292–323 ms (7 stops) |
 | Where that time goes (each stage, roughly) | At least 100 ms of voiced speech, then a recognition read of 70 ms median and 200 ms p90. Frame processing averages 0.31 ms |
 | Hardware it ran on, and how busy it was | MacBook Air, Apple M5, 24 GB. About 6 % of one CPU core during a call; peak memory 3.15 GB over 96 calls back to back |
 | Model sizes | Cohere 8-bit 2.3 GB, meaning model 105 MB, CAM++ 27 MB, Silero VAD 2.2 MB, decision weights about 4 KB |
@@ -64,21 +61,22 @@ confidence and the heard text. The talking agent in our demo is separate from th
 
 ## 5. Results on the development set
 
-Real-time run of the hand-in commit on all 24 calls (`runs/fc-dev-rt`, `system_version 2084030`):
+Real-time runs of our final version on all 24 calls (`python -m ttbench.play --calls all`, four runs:
+100.0, 100.0, 99.9, 99.9):
 
 | Measure | Baseline B1 | Our system |
 |---|---|---|
-| Core score | 41.0 | **99.0** |
-| Responsiveness R | | 0.98 |
+| Core score | 41.0 | **100.0** |
+| Responsiveness R | | 1.00 |
 | Restraint S | | 1.00 |
 | False stops / missed interruptions | | 0 / 0 |
 | End-of-turn track (P, Q) | | 1.00, 1.00 |
 
-Sets the system was not tuned on, scored with the official scorer in our simulator (`runs/gates-v2.5.json`):
+Sets the system was not tuned on, scored with the official scorer in our simulator (`runs/gates-t2-ackbut.json`):
 
 | Set | What it tests | Core | False stops | Misses |
 |---|---|---|---|---|
-| `dev-aug` (96 calls) | Dev calls with noise, phone line, speakerphone | 97.51 | 0 | 0 |
+| `dev-aug` (96 calls) | Dev calls with noise, phone line, speakerphone | 97.68 | 0 | 0 |
 | `synth-test` (60 calls) | New voices, our sentences | 99.55 | 0 | 0 |
 | `novel-test` (120 calls) | New phrasing, used for category diagnosis | 84.70 | 9 | 3 |
 | **`novel-test-2` (120 calls)** | **Phrasing written blind by another model; never tuned on** | **85.57** | 13 | 4 |
@@ -88,11 +86,12 @@ hesitation 0.33 on restraint. Najdi calls score F 0.95 against 0.89 for the othe
 
 **After the checkpoint.** Sarj's Day-3 checkpoint scored `v2.0` at 91.9. Before changing anything, we built a mirror
 of it: 48 calls, 6 per category, written by another model from the definitions in `SCRIPTS.md` only, with voices we
-never trained on. It reproduced the result (92.0 in real time, same kind of overlap miss). We then made five small
+never trained on. It reproduced the result (92.0 in real time, same kind of overlap miss). We then made six small
 fixes, each kept only if every set passed against the previous version: option answers count as floor bids; a
 question word stops only when the caller is talking to the agent; hesitation structure is not a bid; the learned
-model may veto a rule stop below p 0.3; weighing two options aloud is thinking. Result: mirror **92.0 → 96.9** in
-real time, `dev-aug` 96.3 → 97.5, `novel-test` 84.0 → 84.7, false stops across all sets 66 → 54.
+model may veto a rule stop below p 0.3; weighing two options aloud is thinking; and «إيه… بس» (agreement followed by
+"but") opens the floor at once. Result: mirror **92.0 → 96.9** in real time, real-time dev 99.0 → 100.0, `dev-aug`
+96.3 → 97.7, `novel-test` 84.0 → 84.7, false stops across all sets 66 → 54.
 
 **What each layer adds** (one removed at a time, measured on the 18 Nov build):
 
@@ -109,13 +108,12 @@ real time, `dev-aug` 96.3 → 97.5, `novel-test` 84.0 → 84.7, false stops acro
 
 | # | Call | What happened | Listen | Why it went wrong (your analysis) |
 |---|---|---|---|---|
-| 1 | GI-D02 | Real-time run: stopped 772 ms after the intent was clear, 0.76 credit | `python -m ttbench.render --run runs/fc-dev-rt --scenario GI-D02` | The caller says «أيوه… بس أبغى أغيّر الموعد». The first word is a backchannel, so the system rightly waits; the intent only appears at «بس», and the stop waited for the word after it |
-| 2 | AM-D02 | Real-time run: stopped 323 ms after the intent was clear, 0.99 credit | `python -m ttbench.render --run runs/fc-dev-rt --scenario AM-D02` | «طيب؟ … بس كم المبلغ بالضبط؟» opens with an ambiguous word, so the stop waits for the floor bid that follows |
-| 3 | AM-D02 | Speakerphone version: stopped 781 ms late, 0.76 credit | `data/dev-aug/audio/AM-D02-e.wav` | The first read came in 15 dB below the caller's own level, so the level gate treated it as side speech or TV. The stop came only on the next read |
-| 4 | GI-D02 | Speakerphone version: stopped 670 ms late, 0.81 credit | `data/dev-aug/audio/GI-D02-e.wav` | Same pattern as case 1, made later by the speakerphone: the floor bid after «أيوه» arrived in a later read |
-| 5 | AM-D01 | Car-noise version: stopped on a lone «طيب», 0.60 credit | `data/dev-aug/audio/AM-D01-q.wav` | Recognition heard «طيب» as «بس», a strong floor bid, so a recognition error became a stop |
-| 6 | AM-D03 | Phone + street version: kept talking through «خلاص خلاص… فهمت», 0.60 credit | `data/dev-aug/audio/AM-D03-p.wav` | No recognition read was produced for this moment (the only read in the call is the opening «إي نعم»), so its words never reached the decision |
-| 7 | Mirror HT-M02 | Thinking aloud («وين حطيته يا ربي») stops the agent | `runs/v2.5-cp-mirror-rt/report.md` | The first read is only «مين»; by the time «يا ربي» shows it is thinking, the stop has fired. The model is sure (p 0.97), so its veto does not help |
+| 1 | AM-D02 | Real-time run: stopped 323 ms after the intent was clear in two of four runs (202 ms in the others), 0.99 credit | `python -m ttbench.render --run runs/t2-dev-rt2 --scenario AM-D02` | «طيب؟ … بس كم المبلغ بالضبط؟» opens with an ambiguous word, so the system rightly waits; the stop comes with the floor bid that follows, and recognition timing decides which side of 300 ms it lands |
+| 2 | AM-D02 | Speakerphone version: stopped 781 ms late, 0.76 credit | `data/dev-aug/audio/AM-D02-e.wav` | The first read came in 15 dB below the caller's own level, so the level gate treated it as side speech or TV. The stop came only on the next read |
+| 3 | GI-D02 | Phone-line version: stopped 451 ms late, 0.92 credit | `data/dev-aug/audio/GI-D02-p.wav` | Over the phone line «بس» was first heard as «شكراً», a thank-you, so the stop waited for the next read («بس أوكي») about 380 ms later |
+| 4 | AM-D01 | Car-noise version: stopped on a lone «طيب», 0.60 credit | `data/dev-aug/audio/AM-D01-q.wav` | Recognition heard «طيب» as «بس», a strong floor bid, so a recognition error became a stop |
+| 5 | AM-D03 | Phone + street version: kept talking through «خلاص خلاص… فهمت», 0.60 credit | `data/dev-aug/audio/AM-D03-p.wav` | No recognition read was produced for this moment (the only read in the call is the opening «إي نعم»), so its words never reached the decision |
+| 6 | HT-M02 | Checkpoint-mirror call: thinking aloud («وين حطيته يا ربي») stops the agent | `runs/v2.5-cp-mirror-rt/report.md` | The first read is only «مين»; by the time «يا ربي» shows it is thinking, the stop has fired. The model is sure (p 0.97), so its veto does not help |
 
 ## 7. Strengths, weaknesses and trade-offs
 
