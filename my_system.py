@@ -8,7 +8,7 @@ import os
 from ttbench.server import System, run
 from turn import policy
 
-TEAM = "sarj-saud"
+TEAM = "sarj-team1"
 
 
 class MySystem(System):
